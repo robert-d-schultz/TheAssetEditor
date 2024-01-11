@@ -5,6 +5,7 @@ using AssetEditor.Views;
 using AssetEditor.Views.Settings;
 using CommonControls;
 using CommonControls.Common;
+using CommonControls.Editors.AnimationBatchExporter;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace AssetEditor
@@ -20,7 +21,7 @@ namespace AssetEditor
             serviceCollection.AddTransient<OpenEditorCommand>();
             serviceCollection.AddTransient<OpenFileInEditorCommand>();
 
-            serviceCollection.AddScoped<SettingsWindow>();
+            serviceCollection.AddTransient<SettingsWindow>();
             serviceCollection.AddScoped<SettingsViewModel>();
             serviceCollection.AddScoped<MenuBarViewModel>();
 

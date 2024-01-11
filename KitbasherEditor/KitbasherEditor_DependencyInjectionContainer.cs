@@ -1,4 +1,5 @@
-﻿using CommonControls;
+﻿using System;
+using CommonControls;
 using CommonControls.Common;
 using CommonControls.Common.MenuSystem;
 using CommonControls.Services;
@@ -7,16 +8,18 @@ using KitbasherEditor.EventHandlers;
 using KitbasherEditor.Services;
 using KitbasherEditor.ViewModels;
 using KitbasherEditor.ViewModels.MenuBarViews;
+using KitbasherEditor.ViewModels.MeshFitter;
+using KitbasherEditor.ViewModels.PinTool;
+using KitbasherEditor.ViewModels.SaveDialog;
 using KitbasherEditor.ViewModels.SceneExplorerNodeViews;
 using KitbasherEditor.ViewModels.VertexDebugger;
 using KitbasherEditor.Views;
+using KitbasherEditor.Views.EditorViews;
+using KitbasherEditor.Views.EditorViews.PinTool;
 using KitbasherEditor.Views.EditorViews.VertexDebugger;
 using Microsoft.Extensions.DependencyInjection;
-using System;
-using System.Linq;
-using System.Reflection;
-using View3D;
 using View3D.Services;
+using View3D.Services.SceneSaving;
 
 namespace KitbasherEditor
 {
@@ -38,6 +41,15 @@ namespace KitbasherEditor
             // Sub tools
             serviceCollection.AddScoped<VertexDebuggerViewModel>();
             serviceCollection.AddScoped<VertexDebuggerView>();
+            serviceCollection.AddScoped<MeshFitterViewModel>();
+            serviceCollection.AddScoped<ReRiggingViewModel>();
+            serviceCollection.AddScoped<PinToolView>();
+            serviceCollection.AddScoped<PinToolViewModel>();
+
+            // Save dialog
+            serviceCollection.AddScoped<SaveDialogViewModel>();
+            serviceCollection.AddScoped<SaveDialogView>();
+            serviceCollection.AddScoped<SaveSettings>();
 
             // Menubar 
             serviceCollection.AddScoped<TransformToolViewModel>();
@@ -58,8 +70,6 @@ namespace KitbasherEditor
 
             RegisterAllAsOriginalType<IKitbasherUiCommand>(serviceCollection, ServiceLifetime.Transient);
         }
-
-
 
         public override void RegisterTools(IToolFactory factory)
         {

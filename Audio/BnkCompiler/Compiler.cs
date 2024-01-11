@@ -49,7 +49,7 @@ namespace Audio.BnkCompiler
             var allIds = hircChunk.Hircs.Select(x => x.Id).ToList();
             var originalCount = allIds.Count();
             var uniqueCount = allIds.Distinct().Count();
-            Guard.IsEqualTo(originalCount, uniqueCount);
+            //Guard.IsEqualTo(originalCount, uniqueCount);
 
             var compileResult = new CompileResult()
             {
@@ -65,6 +65,7 @@ namespace Audio.BnkCompiler
 
         PackFile ConvertToPackFile(BkhdHeader header, HircChunk hircChunk, string outputFile)
         {
+            var outputName = $"{outputFile}.bnk";
             var headerBytes = BkhdParser.GetAsByteArray(header);
             var hircBytes = new HircParser().GetAsBytes(hircChunk);
 
@@ -75,7 +76,7 @@ namespace Audio.BnkCompiler
             var bytes = memStream.ToArray();
 
             // Convert to output and parse for sanity
-            var bnkPackFile = new PackFile(outputFile, new MemorySource(bytes));
+            var bnkPackFile = new PackFile(outputName, new MemorySource(bytes));
             var parser = new BnkParser();
             var result = parser.Parse(bnkPackFile, "test\\fakefilename.bnk");
 

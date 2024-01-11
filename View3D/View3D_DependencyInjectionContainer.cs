@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Xna.Framework;
 using MonoGame.Framework.WpfInterop;
 using View3D.Commands;
+using View3D.Commands.Bone;
+using View3D.Commands.Bone.Clipboard;
 using View3D.Commands.Face;
 using View3D.Commands.Object;
 using View3D.Commands.Vertex;
@@ -15,6 +17,13 @@ using View3D.Components.Rendering;
 using View3D.Rendering.Geometry;
 using View3D.SceneNodes;
 using View3D.Services;
+using View3D.Services.SceneSaving;
+using View3D.Services.SceneSaving.Geometry;
+using View3D.Services.SceneSaving.Geometry.Strategies;
+using View3D.Services.SceneSaving.Lod;
+using View3D.Services.SceneSaving.Lod.Strategies;
+using View3D.Services.SceneSaving.Material.Strategies;
+using View3D.Services.SceneSaving.WsModel;
 using View3D.Utility;
 
 namespace View3D
@@ -31,17 +40,34 @@ namespace View3D
             // Services
             serviceCollection.AddScoped<ViewOnlySelectedService>();
             serviceCollection.AddScoped<FocusSelectableObjectService>();
-            serviceCollection.AddScoped<SceneSaverService>();
             serviceCollection.AddScoped<ComplexMeshLoader>();
             serviceCollection.AddScoped<WsModelGeneratorService>();
             serviceCollection.AddScoped<FaceEditor>();
             serviceCollection.AddScoped<ObjectEditor>();
             serviceCollection.AddScoped<Rmv2ModelNodeLoader>();
-            serviceCollection.AddScoped<SubToolWindowCreator>(); // Try to get this into common or remove the need for it
+
+            serviceCollection.AddScoped<SaveService>();
+            serviceCollection.AddScoped<SceneSaverService>();
+
+            serviceCollection.AddScoped<GeometryStrategyProvider>();
+            serviceCollection.AddScoped<IGeometryStrategy, NoMeshStrategy>();
+            serviceCollection.AddScoped<IGeometryStrategy, Rmw6Strategy>();
+            serviceCollection.AddScoped<IGeometryStrategy, Rmw7Strategy>();
+            serviceCollection.AddScoped<IGeometryStrategy, Rmw8Strategy>();
+
+            serviceCollection.AddScoped<LodStrategyProvider>();
+            serviceCollection.AddScoped<ILodGenerationStrategy, DefaultLodGeneration>();
+            serviceCollection.AddScoped<ILodGenerationStrategy, Lod0ForAllLodGeneration>();
+            serviceCollection.AddScoped<ILodGenerationStrategy, SimplygonLodGeneration>();
+
+            serviceCollection.AddScoped<MaterialStrategyProvider>();
+            serviceCollection.AddScoped<IMaterialStrategy, Warhammer3WsModelStrategy>();
+            serviceCollection.AddScoped<IMaterialStrategy, Warhammer2WsModelStrategy>();
+            serviceCollection.AddScoped<IMaterialStrategy, NoWsModelStrategy>();
+            
 
             // Resolvers - sort of hacks 
             serviceCollection.AddScoped<IDeviceResolver, DeviceResolverComponent>(x => x.GetService<DeviceResolverComponent>());
-            serviceCollection.AddScoped<ComponentManagerResolver>();
 
             // Components
             RegisterComponents(serviceCollection);
@@ -96,6 +122,20 @@ namespace View3D
             serviceCollection.AddTransient<ObjectSelectionModeCommand>();
             serviceCollection.AddTransient<PinMeshToVertexCommand>();
             serviceCollection.AddTransient<RemapBoneIndexesCommand>();
+            serviceCollection.AddTransient<BoneSelectionCommand>();
+            serviceCollection.AddTransient<TransformBoneCommand>();
+            serviceCollection.AddTransient<ResetTransformBoneCommand>();
+            serviceCollection.AddTransient<PasteWholeTransformBoneCommand>();
+            serviceCollection.AddTransient<PasteIntoSelectedBonesTransformBoneCommand>();
+            serviceCollection.AddTransient<PasteIntoSelectedBonesInRangeTransformFromClipboardBoneCommand>();
+            serviceCollection.AddTransient<PasteIntoSelectedBonesTransformFromClipboardBoneCommand>();
+            serviceCollection.AddTransient<PasteWholeInRangeTransformFromClipboardBoneCommand>();
+            serviceCollection.AddTransient<PasteWholeTransformFromClipboardBoneCommand>();
+            serviceCollection.AddTransient<DuplicateFrameBoneCommand>();
+            serviceCollection.AddTransient<DeleteFrameBoneCommand>();
+            serviceCollection.AddTransient<InterpolateFramesBoneCommand>();
+            serviceCollection.AddTransient<InterpolateFramesSelectedBonesBoneCommand>();
+
         }
         protected void RegisterGameComponent<T>(IServiceCollection serviceCollection) where T : class, IGameComponent
         {

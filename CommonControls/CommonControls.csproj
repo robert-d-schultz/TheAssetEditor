@@ -11,6 +11,7 @@
     <None Remove="Resources\AnimationSlots\Warhammer2AnimationSlots.txt" />
     <None Remove="Resources\AnimationSlots\Warhammer3AnimationSlots.txt" />
     <None Remove="Resources\AnimationSlots\Warhammer3AnimationSlots_dlc23.txt" />
+    <None Remove="Resources\AnimationSlots\Warhammer3AnimationSlots_dlc24.txt" />
     <None Remove="Resources\Icons\Copy.png" />
     <None Remove="Resources\Icons\Cut.png" />
     <None Remove="Resources\Icons\Delete.png" />
@@ -105,7 +106,8 @@
 	  <PackageReference Include="System.IO.FileSystem" Version="4.3.0" />
 	  <PackageReference Include="System.Net.NameResolution" Version="4.3.0" />
 	  <PackageReference Include="System.Net.Primitives" Version="4.3.0" />
-	  <PackageReference Include="FluentValidation" Version="11.5.2" />	  	
+	  <PackageReference Include="FluentValidation" Version="11.5.2" />
+      <PackageReference Include="CommunityToolkit.Diagnostics" Version="8.1.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -122,6 +124,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
     <EmbeddedResource Include="Resources\AnimationSlots\TroyAnimationSlots.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\AnimationSlots\Warhammer3AnimationSlots_dlc24.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
     <Resource Include="Resources\Icons\Copy.png">

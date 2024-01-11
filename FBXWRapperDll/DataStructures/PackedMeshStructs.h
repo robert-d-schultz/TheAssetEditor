@@ -3,6 +3,17 @@
 #include <DirectXMath.h>
 #include <vector>
 #include <string>
+#include "FileInfoData.h"
+
+struct BoneInfo
+{
+    int id;
+    int parentId;
+    FixedString name;
+    
+    DirectX::XMFLOAT4 localRotation;
+    DirectX::XMFLOAT3 localTranslation;
+};
 
 struct BoneAnimKey
 {
@@ -11,24 +22,78 @@ struct BoneAnimKey
 	double timeStampe = 0.0;
 };
 
+struct BoneAnimCurve
+{
+    BoneAnimCurve(size_t keyCount) : keys(std::vector<BoneAnimKey>(keyCount)) {}
+    std::vector<BoneAnimKey> keys;
+};
+
+struct AnimationClip
+{   
+    AnimationClip(size_t boneCount, size_t keyCount) : boneCurves(std::vector<BoneAnimCurve>(boneCount, BoneAnimCurve(keyCount))) {};
+
+    std::vector<BoneAnimCurve> boneCurves;    
+};
+
+
 struct VertexInfluence
 {
+public:
+    //VertexInfluence() {};
+
+    //VertexInfluence(const VertexInfluence& v)
+    //{
+    //    *this = v.Clone();
+    //}
+
+    //void Set(const std::string& boneName, uint32_t boneIndex, float Weight)
+    //{        
+    //    CopyToFixedString(this->boneName, boneName);
+
+    //    this->boneIndex = boneIndex;
+    //    this->weight = weight;
+    //}
+
+    //VertexInfluence Clone() const
+    //{
+    //    VertexInfluence v;
+    //    CopyFixedString(v.boneName, boneName);
+    //    v.boneIndex = boneIndex;
+    //    v.weight = weight;
+
+    //    return v;
+    //}    
+
+    FixedString boneName = ""; // fixed length for simpler interop
 	uint32_t boneIndex = 0;
 	float weight = 0.0f;
 };
 
-struct VertexInfluenceExt
-{
-	std::string boneName = "";
-	uint32_t boneIndex = 0;
-	float weight = 0.0f;
+struct VertexWeight
+{    
+    char boneName[256] = "";    
+    uint32_t boneIndex = 0; // TODO: should be removed, maybe, as it is not known when struct is first filled
+    uint32_t vertexIndex = 0;
+    float weight = 0.0f;
 };
 
 
-struct ControlPointInfluenceExt
+
+
+//struct VertexInfluenceExt
+//{
+//	std::string boneName = "";
+//	uint32_t boneIndex = 0;
+//	float weight = 0.0f;
+//};
+//
+
+struct ControlPointInfluence
 {	
-	VertexInfluenceExt influences[4];
-	int weightCount = 0;
+	//VertexInfluence influences[4];
+	//int weightCount = 0;
+
+    std::vector<VertexInfluence> influences;
 };
 
 struct PackedCommonVertex
@@ -39,23 +104,20 @@ struct PackedCommonVertex
 	DirectX::XMFLOAT3 tangent = { 0, 0, 0 };
 	DirectX::XMFLOAT2 uv = { 0, 0 };
 	DirectX::XMFLOAT4 color = { 1, 0, 0, 1 };
-	VertexInfluence influences[4];
-	int weightCount = 0;
+
+    // TODO: change to, for now, for simplicities sake   
+    //"todo make into this, each point to a position in  'mesh.vertexInfluence[]'"
+    //
+    //// each pointing to and index in a "vertexInfluence[]"     
+    //int influences[4] = {-1, -2, -3, -4}; // -1 means no influence        
 };
 
-struct VertexWeight
-{
-	// TODO: REMOVE DEBUG VALUE(S):
-	char boneName[255] = "Unnamed_BONE\0";
-	int vertexIndex = 0;
-	float vertexWeight = 0.0f;
-};
 
 struct PackedMesh
 {
 	std::string meshName = "Unnamed_Mesh\0";
 	std::vector<PackedCommonVertex> vertices;
-	std::vector<uint16_t> indices;
+	std::vector<uint32_t> indices;
 	std::vector<VertexWeight> vertexWeights;
 };
 

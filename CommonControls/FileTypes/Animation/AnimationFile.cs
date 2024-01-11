@@ -19,6 +19,9 @@ namespace CommonControls.FileTypes.Animation
     [DebuggerDisplay("AnimationFile - {Header.SkeletonName}[{DynamicFrames.Count}]")]
     public class AnimationFile
     {
+        public const int InvalidBoneIndex = -1;
+        public const int BoneIndexNoParent = InvalidBoneIndex;
+
         #region Sub classes
         public class BoneInfo
         {
@@ -42,7 +45,7 @@ namespace CommonControls.FileTypes.Animation
             public uint FlagCount { get; set; } = 0;
             public List<string> FlagVariables { get; set; } = new List<string>();
             public float AnimationTotalPlayTimeInSec { get; set; }
-            public uint UnkownValue_v8 { get; set; } = 0;
+            public uint UnknownValue_v8 { get; set; } = 0;
         }
 
         public enum AnimationBoneMappingType
@@ -173,18 +176,6 @@ namespace CommonControls.FileTypes.Animation
             return header;
         }
 
-        public int GetIdFromBoneName(string name)
-        {
-            var boneInfo = Bones
-                .Where(x => string.Compare(x.Name, name, StringComparison.InvariantCultureIgnoreCase) == 0)
-                .FirstOrDefault();
-
-            if (boneInfo == null)
-                return -1;
-
-            return boneInfo.Id;
-        }
-
         public static AnimationFile Create(PackFile file)
         {
             ILogger logger = Logging.Create<AnimationFile>();
@@ -216,7 +207,7 @@ namespace CommonControls.FileTypes.Animation
 
             if (output.Header.Version == 8)
             {
-                output.Header.UnkownValue_v8 = chunk.ReadUInt32();
+                output.Header.UnknownValue_v8 = chunk.ReadUInt32();
                 output.AnimationParts = LoadAnimationParts_v8(chunk, boneCount);
             }
             else

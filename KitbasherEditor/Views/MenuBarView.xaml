@@ -29,23 +29,24 @@
             <Setter Property="Height" Value="32"/>
             <Style.Triggers>
                 <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Opacity" Value="0.25"></Setter>
+                    <Setter Property="Opacity" Value="0.05"></Setter>
                 </Trigger>
             </Style.Triggers>
         </Style>
 
         <DataTemplate x:Key="defaultButtonTemplate">
-            <Button ToolTip="{Binding Action.ToolTipAttribute.Value}" BorderThickness="0" Background="AliceBlue" Margin="1" 
+            <Button ToolTip="{Binding Action.ToolTipAttribute.Value}" BorderThickness="0" Background="Transparent" Margin="1" 
                     IsEnabled="{Binding Action.IsActionEnabled.Value, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}" 
                     Command="{Binding Path=Action.Command}" 
                     ToolTipService.ShowOnDisabled="True"
+                    Style="{StaticResource NoBackgroundOnDisabledButton}"
                     Visibility="{Binding IsVisible.Value, UpdateSourceTrigger=PropertyChanged , Converter={StaticResource BoolToHiddenConverter}}">
                 <Image Style="{StaticResource ImageStyle}" Source="{Binding Image}"/>
             </Button>
         </DataTemplate>
 
         <DataTemplate x:Key="radioButtonTemplate">
-            <RadioButton    ToolTip="{Binding  Action.ToolTipAttribute.Value}"  BorderThickness="0" Background="AliceBlue" Margin="1" 
+            <RadioButton    ToolTip="{Binding  Action.ToolTipAttribute.Value}"  BorderThickness="0" Background="Transparent" Margin="1"
                             IsChecked="{Binding IsChecked.Value, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}" 
                             Command="{Binding Path=Action.Command}"
                             GroupName="{Binding GroupName}" 
@@ -71,7 +72,7 @@
     <DockPanel>
         <Menu ItemsSource="{Binding MenuItems}"  DockPanel.Dock="Top">
             <Menu.Resources>
-                <Style TargetType="{x:Type MenuItem}">
+                <Style TargetType="{x:Type MenuItem}" BasedOn="{StaticResource {x:Type MenuItem}}">
                     <Setter Property="Header" Value="{Binding NameAttribute.Value}" />
                     <Setter Property="Command" Value="{Binding Action.Command}" />
                     <Style.Triggers>

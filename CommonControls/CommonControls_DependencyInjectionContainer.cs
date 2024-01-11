@@ -1,8 +1,12 @@
 ﻿using System.Linq;
 using System.Reflection;
+using CommonControls.BaseDialogs;
 using CommonControls.Common;
+using CommonControls.Editors.AnimationBatchExporter;
 using CommonControls.Editors.AnimationFilePreviewEditor;
 using CommonControls.Editors.AnimationPack;
+using CommonControls.Editors.BoneMapping;
+using CommonControls.Editors.BoneMapping.View;
 using CommonControls.Editors.CampaignAnimBin;
 using CommonControls.Editors.TextEditor;
 using CommonControls.Editors.VariantMeshDefinition;
@@ -51,12 +55,17 @@ namespace CommonControls
 
             services.AddTransient<ImportAssetCommand>();
 
+            services.AddTransient<IWindowFactory, WindowFactory>();
+            services.AddScoped<BoneMappingView>();
+            services.AddScoped<BoneMappingViewModel>();
+
             // Editors that should be moved into their own projects
             TextEditor_DependencyInjectionContainer.Register(services);
             AnimationPack_DependencyInjectionContainer.Register(services);
             CampaignAnimBin_DependencyInjectionContainer.Register(services);
             VariantMeshDefinition_DependencyInjectionContainer.Register(services);
             AnimationFilePreviewEditor_DependencyInjectionContainer.Register(services);
+            AnimationBatchExporter_DependencyInjectionContainer.Register(services);
             TwUi_DependencyInjectionContainer.Register(services);
         }
 
@@ -67,6 +76,7 @@ namespace CommonControls
             CampaignAnimBin_DependencyInjectionContainer.RegisterTools(factory);
             VariantMeshDefinition_DependencyInjectionContainer.RegisterTools(factory);
             AnimationFilePreviewEditor_DependencyInjectionContainer.RegisterTools(factory);
+            AnimationBatchExporter_DependencyInjectionContainer.RegisterTools(factory);
             TwUi_DependencyInjectionContainer.RegisterTools(factory);
         }
     }
@@ -98,7 +108,10 @@ namespace CommonControls
                 .ToList();
 
             foreach (var implementation in implementations)
+            {
                 serviceCollection.Add(new ServiceDescriptor(typeof(T), implementation, ServiceLifetime.Transient));
+                //serviceCollection.Add(new ServiceDescriptor(implementation, ServiceLifetime.Transient));
+            }
         }
     }
 }

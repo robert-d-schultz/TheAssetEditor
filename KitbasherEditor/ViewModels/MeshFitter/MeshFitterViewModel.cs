@@ -1,15 +1,12 @@
-﻿using CommonControls.Common;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using CommonControls.BaseDialogs;
+using CommonControls.Common;
 using CommonControls.Editors.BoneMapping;
 using CommonControls.FileTypes.Animation;
 using CommonControls.MathViews;
-using CommonControls.Services;
-using KitbasherEditor.Views.EditorViews.MeshFitter;
 using Microsoft.Xna.Framework;
-using MonoGame.Framework.WpfInterop;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Windows;
 using View3D.Animation;
 using View3D.Commands;
 using View3D.Commands.Object;
@@ -19,15 +16,15 @@ using View3D.Utility;
 
 namespace KitbasherEditor.ViewModels.MeshFitter
 {
-    public class MeshFitterViewModel : BoneMappingViewModel
+    public class MeshFitterViewModel : BoneMappingViewModel, IDisposable
     {
-        Window _window;
-
+        private readonly CommandFactory _commandFactory;
+        private readonly AnimationsContainerComponent _animationsContainerComponent;
+        private readonly ResourceLibary _resourceLibary;
+        private readonly SceneManager _sceneManager;
         GameSkeleton _targetSkeleton;
         GameSkeleton _fromSkeleton;
 
-        IComponentManager _componentManager;
-        private readonly CommandFactory _commandFactory;
         AnimationClip _animationClip;
         AnimationPlayer _animationPlayer;
         AnimationPlayer _oldAnimationPlayer;
@@ -44,14 +41,23 @@ namespace KitbasherEditor.ViewModels.MeshFitter
         public Vector3ViewModel BonePositionOffset { get; set; } = new Vector3ViewModel(0);
         public Vector3ViewModel BoneRotationOffset { get; set; } = new Vector3ViewModel(0);
 
-        public MeshFitterViewModel(Window ownerWindow, RemappedAnimatedBoneConfiguration configuration, List<Rmv2MeshNode> meshNodes, GameSkeleton targetSkeleton, AnimationFile currentSkeletonFile, IComponentManager componentManager, CommandFactory commandFactory) : base(configuration)
+        public MeshFitterViewModel(CommandFactory commandFactory, AnimationsContainerComponent animationsContainerComponent, ResourceLibary resourceLibary, SceneManager sceneManager)
         {
-            _window = ownerWindow;
+            _commandFactory = commandFactory;
+            _animationsContainerComponent = animationsContainerComponent;
+            _resourceLibary = resourceLibary;
+            _sceneManager = sceneManager;
+        }
+
+        public void Initialize(IAssetEditorWindow ownerWindow, RemappedAnimatedBoneConfiguration configuration, List<Rmv2MeshNode> meshNodes, GameSkeleton targetSkeleton, AnimationFile currentSkeletonFile)
+        {
+            ShowApplyButton.Value = false;
+            ShowTransformSection.Value = true;
+            Initialize(ownerWindow, configuration);
 
             _meshNodes = meshNodes;
             _targetSkeleton = targetSkeleton;
-            _componentManager = componentManager;
-            _commandFactory = commandFactory;
+
             ScaleFactor.PropertyChanged += (_0, _1) => ApplyMeshFittingTransforms();
             BoneScaleFactor.PropertyChanged += (_0, _1) => BoneScaleUpdate((float)BoneScaleFactor.Value, MeshBones.SelectedItem);
             BonePositionOffset.OnValueChanged += (viewModel) => BonePositionUpdated(viewModel, MeshBones.SelectedItem);
@@ -60,7 +66,7 @@ namespace KitbasherEditor.ViewModels.MeshFitter
             RelativeScale.PropertyChanged += (_0, _1) => ApplyMeshFittingTransforms();
             MeshBones.SelectedItemChanged += (_) => OnBoneSelected();
 
-            _animationPlayer = _componentManager.GetComponent<AnimationsContainerComponent>().RegisterAnimationPlayer(new AnimationPlayer(), "Temp animation rerig" + Guid.NewGuid());
+            _animationPlayer = _animationsContainerComponent.RegisterAnimationPlayer(new AnimationPlayer(), "Temp animation rerig" + Guid.NewGuid());
             _fromSkeleton = new GameSkeleton(currentSkeletonFile, _animationPlayer);
 
             // Build empty animation
@@ -77,36 +83,26 @@ namespace KitbasherEditor.ViewModels.MeshFitter
             _animationPlayer.SetAnimation(_animationClip, _fromSkeleton);
             _animationPlayer.Play();
 
-            var resourceLib = _componentManager.GetComponent<ResourceLibary>();
-            _currentSkeletonNode = new SkeletonNode(resourceLib, _fromSkeleton);
+            _currentSkeletonNode = new SkeletonNode(_resourceLibary, _fromSkeleton);
             _currentSkeletonNode.SelectedNodeColour = Color.White;
-            _componentManager.GetComponent<SceneManager>().RootNode.AddObject(_currentSkeletonNode);
+            _sceneManager.RootNode.AddObject(_currentSkeletonNode);
 
             _oldAnimationPlayer = _meshNodes.First().AnimationPlayer;
             foreach (var mesh in _meshNodes)
                 mesh.AnimationPlayer = _animationPlayer;
         }
 
+        protected override void MappingUpdated()
+        {
+            if (_targetSkeleton == null)
+                return;
+
+            ApplyMeshFittingTransforms();
+        }
+
         private void SkeletonDisplayOffsetUpdated(Vector3ViewModel viewModel)
         {
             _currentSkeletonNode.ModelMatrix = Matrix.CreateTranslation((float)viewModel.X.Value, (float)viewModel.Y.Value, (float)viewModel.Z.Value);
-        }
-
-        public override void AutoMapSelfAndChildrenByName()
-        {
-            base.AutoMapSelfAndChildrenByName();
-            ApplyMeshFittingTransforms();
-        }
-
-        public override void AutoMapSelfAndChildrenByHierarchy()
-        {
-            base.AutoMapSelfAndChildrenByHierarchy();
-            ApplyMeshFittingTransforms();
-        }
-        public override void ClearBindingSelfAndChildren()
-        {
-            base.ClearBindingSelfAndChildren();
-            ApplyMeshFittingTransforms();
         }
 
         void OnBoneSelected()
@@ -119,8 +115,7 @@ namespace KitbasherEditor.ViewModels.MeshFitter
                 BonePositionOffset.Set(MeshBones.SelectedItem.BonePosOffset.X, MeshBones.SelectedItem.BonePosOffset.Y, MeshBones.SelectedItem.BonePosOffset.Z);
 
                 _currentSkeletonNode.SelectedBoneIndex = MeshBones.SelectedItem.BoneIndex.Value;
-                var sceneManager = _componentManager.GetComponent<SceneManager>();
-                var rootNode = sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
+                var rootNode = _sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
                 rootNode.SkeletonNode.SelectedBoneIndex = MeshBones.SelectedItem.MappedBoneIndex.Value;
             }
             else
@@ -131,9 +126,7 @@ namespace KitbasherEditor.ViewModels.MeshFitter
 
                 _currentSkeletonNode.SelectedBoneIndex = null;
 
-
-                var sceneManager = _componentManager.GetComponent<SceneManager>();
-                var rootNode = sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
+                var rootNode = _sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
                 rootNode.SkeletonNode.SelectedBoneIndex = null;
             }
         }
@@ -190,7 +183,7 @@ namespace KitbasherEditor.ViewModels.MeshFitter
 
                 var fromBoneIndex = i;
                 var fromParentBoneIndex = _fromSkeleton.GetParentBoneIndex(fromBoneIndex);
-                Matrix desiredBonePosWorld = Matrix.Identity;
+                var desiredBonePosWorld = Matrix.Identity;
 
                 // Get the world position where we want to move the bone to
                 if (mappedIndex != null)
@@ -231,7 +224,7 @@ namespace KitbasherEditor.ViewModels.MeshFitter
                 }
 
                 // Compute scaling
-                float scale = boneValuesObject.BoneScaleOffset * relativeScale;
+                var scale = boneValuesObject.BoneScaleOffset * relativeScale;
 
                 // To stop the calculations from exploding with NAN values
                 if (scale <= 0 || float.IsNaN(scale))
@@ -258,14 +251,6 @@ namespace KitbasherEditor.ViewModels.MeshFitter
 
                 _animationPlayer.Refresh();
             }
-        }
-
-        public override void OnMappingCreated(int humanoid01BoneIndex, int dwarfBoneIndex)
-        {
-            if (_targetSkeleton == null)
-                return;
-
-            ApplyMeshFittingTransforms();
         }
 
         public void ResetOffsetTransforms()
@@ -295,86 +280,24 @@ namespace KitbasherEditor.ViewModels.MeshFitter
             }
         }
 
-
-        public void CleanUp()
+        public void Dispose()
         {
             // Restore animation player
-            _componentManager.GetComponent<AnimationsContainerComponent>().Remove(_animationPlayer);
+            _animationsContainerComponent.Remove(_animationPlayer);
             foreach (var mesh in _meshNodes)
                 mesh.AnimationPlayer = _oldAnimationPlayer;
 
             // Remove the skeleton node
-            var sceneManager = _componentManager.GetComponent<SceneManager>();
-            var rootNode = sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
+            var rootNode = _sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
             rootNode.SkeletonNode.SelectedBoneIndex = null;
-            _componentManager.GetComponent<SceneManager>().RootNode.RemoveObject(_currentSkeletonNode);
+            _sceneManager.RootNode.RemoveObject(_currentSkeletonNode);
         }
 
-        public void SaveAndClose()
+
+        protected override void ApplyChanges()
         {
             var frame = AnimationSampler.Sample(0, _fromSkeleton, _animationClip);
             _commandFactory.Create<CreateAnimatedMeshPoseCommand>().Configure(x => x.Configure(_meshNodes, frame)).BuildAndExecute();
-            _window.Close();
-        }
-
-        public static void ShowView(List<ISelectable> meshesToFit, IComponentManager componentManager, SkeletonAnimationLookUpHelper skeletonHelper, PackFileService pfs, CommandFactory commandFactory)
-        {
-            var sceneManager = componentManager.GetComponent<SceneManager>();
-            var resourceLib = componentManager.GetComponent<ResourceLibary>();
-            var animCollection = componentManager.GetComponent<AnimationsContainerComponent>();
-
-            var meshNodes = meshesToFit
-                .Where(x => x is Rmv2MeshNode)
-                .Select(x => x as Rmv2MeshNode)
-                .ToList();
-
-            var allSkeltonNames = meshNodes
-                .Select(x => x.Geometry.ParentSkeletonName)
-                .Distinct();
-
-            if (allSkeltonNames.Count() != 1)
-            {
-                var commaList = string.Join(",", allSkeltonNames);
-                System.Windows.MessageBox.Show($"Unexpected number of skeletons - {commaList}. This tool only works for one skeleton");
-                return;
-            }
-
-            var currentSkeletonName = allSkeltonNames.First();
-            var currentSkeletonFile = skeletonHelper.GetSkeletonFileFromName(pfs, currentSkeletonName);
-
-            var usedBoneIndexes = meshNodes
-                .SelectMany(x => x.Geometry.GetUniqeBlendIndices())
-                .Distinct()
-                .Select(x => (int)x)
-                .ToList();
-
-            var rootNode = sceneManager.GetNodeByName<MainEditableNode>(SpecialNodes.EditableModel);
-            var targetSkeleton = rootNode.SkeletonNode;
-            var targetSkeletonFile = skeletonHelper.GetSkeletonFileFromName(pfs, targetSkeleton.Name);
-
-            RemappedAnimatedBoneConfiguration config = new RemappedAnimatedBoneConfiguration();
-            config.ParnetModelSkeletonName = targetSkeleton.Name;
-            config.ParentModelBones = AnimatedBoneHelper.CreateFromSkeleton(targetSkeletonFile);
-
-            config.MeshSkeletonName = currentSkeletonName;
-            config.MeshBones = AnimatedBoneHelper.CreateFromSkeleton(currentSkeletonFile, usedBoneIndexes);
-
-
-            var containingWindow = new Window();
-            containingWindow.Title = "MeshFitter";
-            containingWindow.Width = 1200;
-            containingWindow.Height = 1100;
-            containingWindow.DataContext = new MeshFitterViewModel(containingWindow, config, meshNodes, targetSkeleton.Skeleton, currentSkeletonFile, componentManager, commandFactory);
-            containingWindow.Content = new MeshFitterView();
-            containingWindow.Closed += ContainingWindow_Closed;
-            containingWindow.Show();
-        }
-
-        private static void ContainingWindow_Closed(object sender, EventArgs e)
-        {
-            var window = sender as Window;
-            var dataContex = window.DataContext as MeshFitterViewModel;
-            dataContex.CleanUp();
         }
     }
 }

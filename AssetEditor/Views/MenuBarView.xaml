@@ -10,6 +10,10 @@
 
     <DockPanel>
         <Menu DockPanel.Dock="Top">
+            <Menu.Resources>
+                <Style TargetType="{x:Type MenuItem}" BasedOn="{StaticResource {x:Type MenuItem}}"/>
+            </Menu.Resources>
+
             <MenuItem Header="_File">
                 <MenuItem Header="Open" Command="{Binding MenuBar.OpenPackFileCommand}"/>
                 <MenuItem Header="Create">
@@ -20,7 +24,7 @@
                 </MenuItem>
                 <MenuItem Header="Recent Files" ItemsSource="{Binding MenuBar.RecentPackFiles}">
                     <MenuItem.Style>
-                        <Style TargetType="{x:Type MenuItem}">
+                        <Style TargetType="{x:Type MenuItem}" BasedOn="{StaticResource {x:Type MenuItem}}">
                             <Style.Triggers>
                                 <Trigger Property="HasItems" Value="False">
                                     <Setter Property="IsEnabled" Value="False" />
@@ -29,7 +33,7 @@
                         </Style>
                     </MenuItem.Style>
                     <MenuItem.ItemContainerStyle>
-                        <Style TargetType="{x:Type MenuItem}">
+                        <Style TargetType="{x:Type MenuItem}" BasedOn="{StaticResource {x:Type MenuItem}}">
                             <Setter Property="Command" Value="{Binding Command}" />
                         </Style>
                     </MenuItem.ItemContainerStyle>
@@ -76,7 +80,7 @@
                 <MenuItem Header="Animation Transfer Tool" Command="{Binding MenuBar.OpenAnimationTransferToolCommand}" />
                 <MenuItem Header="Super view" Command="{Binding MenuBar.OpenSuperViewToolCommand}" />
                 <MenuItem Header="Skeleton Editor" Command="{Binding MenuBar.OpenTechSkeletonEditorCommand}" />
-
+                <MenuItem Header="Animation Keyframe Editor" Command="{Binding MenuBar.OpenAnimationKeyframeCommand}" />
                 <Separator/>
                 <MenuItem Header="Animation File Batch converter" Command="{Binding MenuBar.OpenAnimationBatchExporterCommand}" />
                 <MenuItem Header="Warhammer 2 Animpack Updater" Command="{Binding MenuBar.OpenWh2AnimpackUpdaterCommand}" Visibility="Collapsed"  />
