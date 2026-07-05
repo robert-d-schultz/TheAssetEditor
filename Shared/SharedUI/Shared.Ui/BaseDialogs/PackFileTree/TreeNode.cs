@@ -41,8 +41,10 @@ namespace Shared.Ui.BaseDialogs.PackFileTree
         [ObservableProperty] public partial NodeType NodeType { get; private set; }
 
         public bool UnsavedChanged => Utility.TreeNodeHelper.GetRootNode(this)?.UnsavedChanges.IsChanged(this) ?? false;
+        public TreeNode IconNode => this;
 
         public void NotifyUnsavedChangedChanged() => OnPropertyChanged(nameof(UnsavedChanged));
+        public void NotifyNodeVisualChanged() => OnPropertyChanged(nameof(IconNode));
 
         public TreeNode(string name, NodeType type, TreeNode? parent)
         {

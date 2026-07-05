@@ -45,6 +45,11 @@
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>Always</CopyToPublishDirectory>
         </Content>
+                <Content Include="..\AiDocumentation\**\*.*">
+            <Link>AiDocumentation\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+        </Content>        
     </ItemGroup>
 
     <PropertyGroup>
@@ -58,6 +63,10 @@
         <Version>0.76.0</Version>
         <AnalysisLevel>6.0</AnalysisLevel>
     </PropertyGroup>
+
+    <ItemGroup>
+      <Content Remove="..\docs\Documentation\packfilehandling2.html" />
+    </ItemGroup>
 
     <ItemGroup>
         <None Include="..\.editorconfig" />
@@ -81,6 +90,11 @@
       <None Update="Language_En.json">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Update="..\docs\asseteditor-ipc.md" Link="AiFiles\asseteditor-ipc.md" />
+      <Content Update="..\docs\ca-pack-cache-retrospective.md" Link="AiFiles\ca-pack-cache-retrospective.md" />
     </ItemGroup>
 
     <PropertyGroup>

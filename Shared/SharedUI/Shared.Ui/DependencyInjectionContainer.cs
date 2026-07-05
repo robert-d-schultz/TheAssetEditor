@@ -59,6 +59,7 @@ namespace Shared.Ui
             services.AddScoped<SaveAsPackFileContainerCommand>();
             services.AddScoped<SavePackFileContainerCommand>();
             services.AddScoped<SetAsEditablePackCommand>();
+            services.AddScoped<ToggleIgnoredForSerializationCommand>();
         }
 
         private static void RegisterPackFileContextMenuItems(PackFileContextMenuRegistry registry)
@@ -80,6 +81,7 @@ namespace Shared.Ui
             registry.RegisterPackFileContextMenuItem<RenameNodeCommand>(ContextMenuType.MainApplication, path: "", priority: 10, ContextMenuCluster.FileOperation);
             registry.RegisterPackFileContextMenuItem<DeleteNodeCommand>(ContextMenuType.MainApplication, path: "", priority: 20, ContextMenuCluster.FileOperation);
             registry.RegisterPackFileContextMenuItem<CopyNodePathCommand>(ContextMenuType.MainApplication, path: "", priority: 30, ContextMenuCluster.FileOperation);
+            registry.RegisterPackFileContextMenuItem<ToggleIgnoredForSerializationCommand>(ContextMenuType.MainApplication, path: "", priority: 40, ContextMenuCluster.FileOperation);
 
             registry.RegisterPackFileContextMenuItem<ExportToDirectoryCommand>(ContextMenuType.MainApplication, path: "Export", priority: 0, ContextMenuCluster.Export);
 

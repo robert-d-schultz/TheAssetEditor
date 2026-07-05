@@ -61,6 +61,7 @@ namespace Shared.EmbeddedResources
         [AllowNull]public static BitmapImage VertexDebuggerIcon { get; private set; }
 
         [AllowNull] public static BitmapSource InformationIcon { get; private set; }
+        [AllowNull] public static BitmapSource IgnoredFileIcon { get; private set; }
 
         [AllowNull] public static BitmapImage AudioFileIcon { get; private set; }
         [AllowNull] public static BitmapImage AssignTextureFromOtherIcon { get; private set; }
@@ -119,6 +120,7 @@ namespace Shared.EmbeddedResources
             VertexDebuggerIcon = BitmapToImageSource(@"icons8-question-mark-48.png");
 
             InformationIcon = BitmapToImageSource(SystemIcons.Information);
+            IgnoredFileIcon = BitmapToImageSource(SystemIcons.Error);
 
             AudioFileIcon = BitmapToImageSource("audio_file.png");
 

@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using Shared.Core.ErrorHandling;
 using Shared.Core.PackFiles;
+using Shared.Core.PackFiles.Models;
 using Shared.Core.Services;
 using Shared.Ui.BaseDialogs.PackFileTree.Utility;
 
@@ -14,7 +15,13 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
         public bool ShouldAdd(TreeNode node)
         {
             var container = TreeNodeHelper.GetPackFileContainer(node);
-            return node.NodeType != NodeType.File && container is { IsReadOnly: false };
+            if (container is not { IsReadOnly: false })
+                return false;
+
+            if (node.NodeType != NodeType.File)
+                return true;
+
+            return container.ContainerType == PackFileContainerType.SystemFolder;
         }
 
         public bool IsEnabled(TreeNode node) => true;

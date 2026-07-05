@@ -1,6 +1,8 @@
 using Test.TestingUtility.TestUtility;
 using System.Diagnostics;
 using Moq;
+using Shared.Core.PackFiles.Models;
+using Shared.Ui.BaseDialogs.PackFileTree;
 using Shared.Core.Services;
 using Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands;
 
@@ -19,6 +21,30 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
             var command = new OpenPackInFileExplorerCommand(_packFileService, new Mock<IStandardDialogs>().Object, new Mock<IFileSystemAccess>().Object, MockScopedLogger.Create());
 
             Assert.That(command.ShouldAdd(root), Is.True);
+        }
+
+        [Test]
+        public void ShouldAdd_ReturnsTrueForSystemFolderFileNode()
+        {
+            var container = CreateContainer(PackFileContainerType.SystemFolder);
+            var root = CreateRoot(container);
+            var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
+
+            var command = new OpenPackInFileExplorerCommand(_packFileService, new Mock<IStandardDialogs>().Object, new Mock<IFileSystemAccess>().Object, MockScopedLogger.Create());
+
+            Assert.That(command.ShouldAdd(fileNode), Is.True);
+        }
+
+        [Test]
+        public void ShouldAdd_ReturnsFalseForNonSystemFolderFileNode()
+        {
+            var container = CreateContainer(PackFileContainerType.Normal);
+            var root = CreateRoot(container);
+            var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
+
+            var command = new OpenPackInFileExplorerCommand(_packFileService, new Mock<IStandardDialogs>().Object, new Mock<IFileSystemAccess>().Object, MockScopedLogger.Create());
+
+            Assert.That(command.ShouldAdd(fileNode), Is.False);
         }
 
         [Test]
@@ -73,6 +99,16 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
 
             // Assert
             dialogs.Verify(x => x.ShowDialogBox(It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+        }
+
+        private static IPackFileContainer CreateContainer(PackFileContainerType containerType)
+        {
+            var container = new Mock<IPackFileContainer>();
+            container.SetupGet(x => x.Name).Returns("container");
+            container.SetupGet(x => x.SystemFilePath).Returns("C:\\temp\\project");
+            container.SetupGet(x => x.ContainerType).Returns(containerType);
+            container.SetupGet(x => x.IsReadOnly).Returns(false);
+            return container.Object;
         }
     }
 }
