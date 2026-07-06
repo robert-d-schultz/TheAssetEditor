@@ -39,13 +39,20 @@ namespace AssetEditor.UiCommands
                 return;
             }
 
-            var initialOutputName = Path.GetFileName(window.SelectedFolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            var saveDialogResult = _standardDialogs.ShowSystemSaveFileDialog(initialOutputName, "PackFile | *.pack", "pack");
-            if (!saveDialogResult.Result || string.IsNullOrWhiteSpace(saveDialogResult.FilePath))
+            if (string.IsNullOrWhiteSpace(window.SelectedOutputFolderPath))
+            {
+                _standardDialogs.ShowDialogBox("No output folder was selected", "Error");
                 return;
+            }
+
+            var projectFolderName = Path.GetFileName(window.SelectedFolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(projectFolderName))
+                projectFolderName = "project";
+
+            var outputPath = Path.Combine(window.SelectedOutputFolderPath, projectFolderName + ".pack");
 
             var folderPack = _systemFolderContainerFactory.Create(window.SelectedFolderPath);
-            folderPack.PackFileSettings.SaveLocationPath = Path.ChangeExtension(saveDialogResult.FilePath, ".pack");
+            folderPack.PackFileSettings.SaveLocationPath = outputPath;
             if (folderPack.PackFileSettings.GameVersion == null)
                 folderPack.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
             _packFileService.AddContainer(folderPack);
