@@ -3,6 +3,7 @@ using Serilog;
 using Shared.Core.ErrorHandling;
 using Shared.Core.PackFiles;
 using Shared.Core.PackFiles.Models.Containers;
+using Shared.Core.PackFiles.Models;
 using Shared.Core.Services;
 using Shared.Core.Settings;
 using Shared.Ui.BaseDialogs.PackFileTree.Utility;
@@ -42,17 +43,12 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
             }
 
             var packDescription = CommandLoggingHelper.DescribePack(container);
-            var systemPath = container.SystemFilePath;
+            var systemPath = ResolveSavePath(container, packDescription);
             if (string.IsNullOrWhiteSpace(systemPath))
-            {
-                var saveDialogResult = standardDialogs.ShowSystemSaveFileDialog(container.Name, "PackFile | *.pack", "pack");
-                if (!saveDialogResult.Result || string.IsNullOrEmpty(saveDialogResult.FilePath))
-                {
-                    _logger.Here().Information($"Save cancelled for pack file container '{packDescription}'");
-                    return;
-                }
-                systemPath = saveDialogResult.FilePath;
-            }
+                return;
+
+            if (!ValidateSaveLocation(systemPath))
+                return;
 
             using (standardDialogs.ShowWaitCursor())
             {
@@ -60,8 +56,6 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
                 {
                     var gameInformation = GameInformationDatabase.GetGameById(applicationSettingsService.CurrentSettings.CurrentGame);
                     _logger.Here().Information($"Saving pack file container '{packDescription}' to '{systemPath}'");
-                    if (container is SystemFolderContainer)
-                        systemPath = Path.ChangeExtension(systemPath, ".pack");
                     packFileService.SavePackContainer(container, systemPath, false, gameInformation);
                     _logger.Here().Information($"Saved pack file container '{packDescription}' to '{systemPath}'");
                 }
@@ -84,17 +78,12 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
             }
 
             var packDescription = CommandLoggingHelper.DescribePack(pack);
-            var systemPath = pack.SystemFilePath;
+            var systemPath = ResolveSavePath(pack, packDescription);
             if (string.IsNullOrWhiteSpace(systemPath))
-            {
-                var saveDialogResult = standardDialogs.ShowSystemSaveFileDialog(pack.Name, "PackFile | *.pack", "pack");
-                if (!saveDialogResult.Result || string.IsNullOrEmpty(saveDialogResult.FilePath))
-                {
-                    _logger.Here().Information($"Save cancelled for editable pack '{packDescription}'");
-                    return;
-                }
-                systemPath = saveDialogResult.FilePath;
-            }
+                return;
+
+            if (!ValidateSaveLocation(systemPath))
+                return;
 
             using (standardDialogs.ShowWaitCursor())
             {
@@ -111,6 +100,52 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
                     standardDialogs.ShowDialogBox("Error saving:\n\n" + e.Message, "Error");
                 }
             }
+        }
+
+        private string? ResolveSavePath(IPackFileContainer container, string packDescription)
+        {
+            var systemPath = container.ContainerType == PackFileContainerType.SystemFolder
+                ? container.PackFileSettings.SaveLocationPath
+                : container.SystemFilePath;
+
+            if (!string.IsNullOrWhiteSpace(systemPath))
+                return Path.ChangeExtension(systemPath, ".pack");
+
+            var saveDialogResult = standardDialogs.ShowSystemSaveFileDialog(container.Name, "PackFile | *.pack", "pack");
+            if (!saveDialogResult.Result || string.IsNullOrWhiteSpace(saveDialogResult.FilePath))
+            {
+                _logger.Here().Information($"Save cancelled for pack file container '{packDescription}'");
+                return null;
+            }
+
+            systemPath = Path.ChangeExtension(saveDialogResult.FilePath, ".pack");
+            if (container.ContainerType == PackFileContainerType.SystemFolder)
+                container.PackFileSettings.SaveLocationPath = systemPath;
+
+            return systemPath;
+        }
+
+        private bool ValidateSaveLocation(string systemPath)
+        {
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(systemPath);
+            }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                standardDialogs.ShowDialogBox($"Invalid packfile output location:\n\n{systemPath}", "Error");
+                return false;
+            }
+
+            var directoryPath = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            {
+                standardDialogs.ShowDialogBox($"Packfile output folder does not exist:\n\n{directoryPath}", "Error");
+                return false;
+            }
+
+            return true;
         }
     }
 }

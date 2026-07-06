@@ -13,6 +13,7 @@
   "SettingsWindow.GridSize": "Grid Size",
   "SettingsWindow.VertexSelectionColour": "Vertex Selection Colour",
   "SettingsWindow.SaveButton": "Save",
+  "PackFileTree.ContextMenu.ChangeOutputLocation": "Change output location",
 
   "UpdaterWindow.Title": "Updater",
   "UpdaterWindow.UpdateInfo": "A new version of AssetEditor is available!\n\nYour current version is {0}. Update to version {1} to get the latest changes detailed below.",

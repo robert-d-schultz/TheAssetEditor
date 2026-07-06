@@ -13,6 +13,7 @@
   "SettingsWindow.GridSize": "网格大小",
   "SettingsWindow.VertexSelectionColour": "顶点选择颜色",
   "SettingsWindow.SaveButton": "保存",
+  "PackFileTree.ContextMenu.ChangeOutputLocation": "更改输出位置",
 
   "UpdaterWindow.Title": "更新器",
   "UpdaterWindow.UpdateInfo": "AssetEditor 有新版本可用！\n\n当前版本为 {0}。更新到版本 {1} 以获取以下最新更改。",

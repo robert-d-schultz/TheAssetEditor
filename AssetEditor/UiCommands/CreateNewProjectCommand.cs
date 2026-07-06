@@ -1,4 +1,5 @@
-﻿using CommonControls.BaseDialogs;
+﻿using System.IO;
+using CommonControls.BaseDialogs;
 using Shared.Core.Events;
 using Shared.Core.PackFiles;
 using Shared.Core.PackFiles.Utility;
@@ -38,7 +39,13 @@ namespace AssetEditor.UiCommands
                 return;
             }
 
+            var initialOutputName = Path.GetFileName(window.SelectedFolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            var saveDialogResult = _standardDialogs.ShowSystemSaveFileDialog(initialOutputName, "PackFile | *.pack", "pack");
+            if (!saveDialogResult.Result || string.IsNullOrWhiteSpace(saveDialogResult.FilePath))
+                return;
+
             var folderPack = _systemFolderContainerFactory.Create(window.SelectedFolderPath);
+            folderPack.PackFileSettings.SaveLocationPath = Path.ChangeExtension(saveDialogResult.FilePath, ".pack");
             if (folderPack.PackFileSettings.GameVersion == null)
                 folderPack.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
             _packFileService.AddContainer(folderPack);

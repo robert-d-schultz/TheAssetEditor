@@ -53,7 +53,7 @@ namespace Shared.Core.PackFiles.Models.Containers
             _eventHub = eventHub;
             _syncContext = syncContext ?? SynchronizationContext.Current;
             SystemFilePath = folderPath;
-            PackFileSettings.SaveLocationPath = folderPath;
+            PackFileSettings.SaveLocationPath = GetDefaultOutputPackPath(folderPath);
 
             LoadProjectSettingsFromDisk();
             EnsureProjectSettingsFileIsIgnored();
@@ -113,6 +113,9 @@ namespace Shared.Core.PackFiles.Models.Containers
                     return;
 
                 _isApplyingProjectSettings = true;
+                if (!string.IsNullOrWhiteSpace(settings.OutputPackFilePath))
+                    PackFileSettings.SaveLocationPath = settings.OutputPackFilePath;
+
                 PackFileSettings.GameVersion = settings.GameVersion;
 
                 var normalizedIgnoredFiles = (settings.IgnoredFilesWhenSerializing ?? [])
@@ -149,6 +152,7 @@ namespace Shared.Core.PackFiles.Models.Containers
 
                 var settings = new SystemFolderProjectSettings
                 {
+                    OutputPackFilePath = PackFileSettings.SaveLocationPath,
                     GameVersion = PackFileSettings.GameVersion,
                     IgnoredFilesWhenSerializing = ignoredFiles
                 };
@@ -474,6 +478,8 @@ namespace Shared.Core.PackFiles.Models.Containers
 
         public void SaveToDisk(string path, bool createBackup, GameInformation gameInformation)
         {
+            ValidateSaveLocation(path);
+
             var effectiveGameInformation = PackFileSettings.GameVersion.HasValue
                 ? GameInformationDatabase.GetGameById(PackFileSettings.GameVersion.Value)
                 : gameInformation;
@@ -510,6 +516,35 @@ namespace Shared.Core.PackFiles.Models.Containers
 
                 _fileSystemAccess.FileMove(tempPath, path);
             }
+        }
+
+        private void ValidateSaveLocation(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new IOException("Packfile output location is not set.");
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(path);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                throw new IOException($"Packfile output location is invalid: {path}", ex);
+            }
+
+            var directoryPath = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrWhiteSpace(directoryPath))
+                throw new IOException($"Packfile output location is invalid: {path}");
+
+            if (!_fileSystemAccess.DirectoryExists(directoryPath))
+                throw new IOException($"Packfile output folder does not exist: {directoryPath}");
+        }
+
+        private static string GetDefaultOutputPackPath(string folderPath)
+        {
+            var trimmedFolderPath = folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return Path.ChangeExtension(trimmedFolderPath, ".pack");
         }
 
         // --- FileSystemWatcher integration ---
@@ -715,6 +750,7 @@ namespace Shared.Core.PackFiles.Models.Containers
 
         private class SystemFolderProjectSettings
         {
+            public string? OutputPackFilePath { get; set; }
             public GameTypeEnum? GameVersion { get; set; }
             public List<string>? IgnoredFilesWhenSerializing { get; set; }
         }

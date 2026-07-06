@@ -42,6 +42,7 @@ namespace Shared.Ui
 
             // TODO: Should all be transient?
             services.AddScoped<CopyNodePathCommand>();
+            services.AddScoped<ChangeOutputLocationCommand>();
             services.AddScoped<ClosePackContainerFileCommand>();
             services.AddScoped<CopyToEditablePackCommand>();
             services.AddScoped<CreateFolderCommand>();
@@ -69,7 +70,8 @@ namespace Shared.Ui
             registry.RegisterPackFileContextMenuItem<SetAsEditablePackCommand>(ContextMenuType.MainApplication, path: "", priority: 10, ContextMenuCluster.PackFileOperation);
             registry.RegisterPackFileContextMenuItem<SavePackFileContainerCommand>(ContextMenuType.MainApplication, path: "", priority: 20, ContextMenuCluster.PackFileOperation);
             registry.RegisterPackFileContextMenuItem<SaveAsPackFileContainerCommand>(ContextMenuType.MainApplication, path: "", priority: 30, ContextMenuCluster.PackFileOperation);
-            registry.RegisterPackFileContextMenuItem<CopyToEditablePackCommand>(ContextMenuType.MainApplication, path: "", priority: 40, ContextMenuCluster.PackFileOperation);
+            registry.RegisterPackFileContextMenuItem<ChangeOutputLocationCommand>(ContextMenuType.MainApplication, path: "", priority: 40, ContextMenuCluster.PackFileOperation);
+            registry.RegisterPackFileContextMenuItem<CopyToEditablePackCommand>(ContextMenuType.MainApplication, path: "", priority: 50, ContextMenuCluster.PackFileOperation);
 
             registry.RegisterPackFileContextMenuItem<ImportFileCommand>(ContextMenuType.MainApplication, path: "Import", priority: 0, ContextMenuCluster.FolderOperation);
             registry.RegisterPackFileContextMenuItem<ImportDirectoryCommand>(ContextMenuType.MainApplication, path: "Import", priority: 10, ContextMenuCluster.FolderOperation);

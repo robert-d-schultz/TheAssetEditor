@@ -124,6 +124,16 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         }
 
         [Test]
+        public void SaveToDisk_MissingOutputFolder_ThrowsUserReadableIOException()
+        {
+            var outputPath = Path.Combine(_outputDir, "missing", "output.pack");
+
+            var ex = Assert.Throws<IOException>(() => _container.SaveToDisk(outputPath, false, _gameInfo));
+
+            Assert.That(ex!.Message, Does.Contain("Packfile output folder does not exist"));
+        }
+
+        [Test]
         public void SaveToDisk_FileContentPreserved()
         {
             var outputPath = Path.Combine(_outputDir, "output.pack");

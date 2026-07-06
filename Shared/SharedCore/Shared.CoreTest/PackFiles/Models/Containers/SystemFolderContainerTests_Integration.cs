@@ -61,6 +61,44 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         }
 
         [Test]
+        public void ProjectSettings_PersistsOutputPackFilePath()
+        {
+            var eventHub = new Mock<IGlobalEventHub>();
+            var fileSystem = CreateRealFileSystemAccess();
+            var watcher = new Mock<IFileSystemWatcher>();
+            var outputFolder = Path.Combine(_tempDir, "output");
+            Directory.CreateDirectory(outputFolder);
+            var outputPath = Path.Combine(outputFolder, "generated.pack");
+
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            container.PackFileSettings.SaveLocationPath = outputPath;
+            container.Dispose();
+
+            var projectSettingsPath = Path.Combine(_tempDir, "project_ignore.json");
+            Assert.That(File.Exists(projectSettingsPath), Is.True);
+            var json = File.ReadAllText(projectSettingsPath);
+            Assert.That(json, Does.Contain("OutputPackFilePath"));
+            Assert.That(json, Does.Contain(outputPath.Replace("\\", "\\\\")));
+
+            var reopened = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            Assert.That(reopened.PackFileSettings.SaveLocationPath, Is.EqualTo(outputPath));
+            reopened.Dispose();
+        }
+
+        [Test]
+        public void ProjectSettings_DefaultOutputPackFilePath_IsBesideProjectFolder()
+        {
+            var eventHub = new Mock<IGlobalEventHub>();
+            var fileSystem = CreateRealFileSystemAccess();
+            var watcher = new Mock<IFileSystemWatcher>();
+
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+
+            Assert.That(container.PackFileSettings.SaveLocationPath, Is.EqualTo(Path.ChangeExtension(_tempDir, ".pack")));
+            container.Dispose();
+        }
+
+        [Test]
         public void ComplexFlow_SystemFolderProject_FromKarlPack_PersistsIgnoreSettings_AndSavesExpectedPack()
         {
             // Arrange: load Karl pack as game pack
