@@ -1,28 +1,34 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using Shared.Core.Events;
-using Shared.Core.PackFiles.Events;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Shared.Core.PackFiles.Utility;
+using Shared.Core.Services;
 using Shared.Core.Settings;
 
 namespace Shared.Core.PackFiles.Models
 {
     public class PackFileSettings
     {
+        private static readonly JsonSerializerOptions JsonOptions = new()
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() }
+        };
+
         private string? _saveLocationPath;
         private GameTypeEnum? _gameVersion;
         private bool _enablePackFileCorruptionDetection;
         private ObservableCollection<string> _ignoredFilesWhenSerializing = new();
-        private IGlobalEventHub? _eventHub;
 
         public PackFileSettings()
         {
             _ignoredFilesWhenSerializing.CollectionChanged += OnIgnoredFilesChanged;
         }
 
-        public void SetEventHub(IGlobalEventHub? eventHub)
-        {
-            _eventHub = eventHub;
-        }
+        [JsonIgnore]
+        public bool SerializeToDisk { get; set; }
 
         public string? SaveLocationPath
         {
@@ -33,7 +39,6 @@ namespace Shared.Core.PackFiles.Models
                     return;
 
                 _saveLocationPath = value;
-                PublishSettingsChanged();
             }
         }
 
@@ -46,7 +51,6 @@ namespace Shared.Core.PackFiles.Models
                     return;
 
                 _gameVersion = value;
-                PublishSettingsChanged();
             }
         }
 
@@ -59,7 +63,6 @@ namespace Shared.Core.PackFiles.Models
                     return;
 
                 _enablePackFileCorruptionDetection = value;
-                PublishSettingsChanged();
             }
         }
 
@@ -74,18 +77,68 @@ namespace Shared.Core.PackFiles.Models
                 _ignoredFilesWhenSerializing.CollectionChanged -= OnIgnoredFilesChanged;
                 _ignoredFilesWhenSerializing = value ?? new ObservableCollection<string>();
                 _ignoredFilesWhenSerializing.CollectionChanged += OnIgnoredFilesChanged;
-                PublishSettingsChanged();
             }
+        }
+
+        public void Save()
+        {
+            if (!SerializeToDisk)
+                return;
+
+            throw new InvalidOperationException("Serialized pack-file settings require a target path and file-system access.");
+        }
+
+        public void Save(string path, IFileSystemAccess fileSystemAccess)
+        {
+            if (!SerializeToDisk)
+                return;
+
+            var settingsToSerialize = new PackFileSettings
+            {
+                SaveLocationPath = SaveLocationPath,
+                EnablePackFileCorruptionDetection = EnablePackFileCorruptionDetection,
+                GameVersion = GameVersion,
+                IgnoredFilesWhenSerializing = new ObservableCollection<string>(NormalizeIgnoredFiles(IgnoredFilesWhenSerializing))
+            };
+
+            var json = JsonSerializer.Serialize(settingsToSerialize, JsonOptions);
+            fileSystemAccess.FileWriteAllBytes(path, Encoding.UTF8.GetBytes(json));
+        }
+
+        public void ApplySerializedSettings(PackFileSettings settings)
+        {
+            SaveLocationPath = settings.SaveLocationPath;
+            EnablePackFileCorruptionDetection = settings.EnablePackFileCorruptionDetection;
+            GameVersion = settings.GameVersion;
+            IgnoredFilesWhenSerializing = new ObservableCollection<string>(NormalizeIgnoredFiles(settings.IgnoredFilesWhenSerializing));
+        }
+
+        public static PackFileSettings? Load(string path, IFileSystemAccess fileSystemAccess)
+        {
+            var settingsBytes = fileSystemAccess.FileReadAllBytes(path);
+            var json = Encoding.UTF8.GetString(settingsBytes);
+            var settings = JsonSerializer.Deserialize<PackFileSettings>(json, JsonOptions);
+            if (settings == null || !string.IsNullOrWhiteSpace(settings.SaveLocationPath))
+                return settings;
+
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.TryGetProperty("OutputPackFilePath", out var legacyOutputPath) && legacyOutputPath.ValueKind == JsonValueKind.String)
+                settings.SaveLocationPath = legacyOutputPath.GetString();
+
+            return settings;
+        }
+
+        private static List<string> NormalizeIgnoredFiles(IEnumerable<string>? ignoredFiles)
+        {
+            return (ignoredFiles ?? [])
+                .Where(x => string.IsNullOrWhiteSpace(x) == false)
+                .Select(PathNormalization.NormalizeFileName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         private void OnIgnoredFilesChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
-            PublishSettingsChanged();
-        }
-
-        private void PublishSettingsChanged()
-        {
-            _eventHub?.PublishGlobalEvent(new PackFileSettingsChangedEvent(this));
         }
     }
 }

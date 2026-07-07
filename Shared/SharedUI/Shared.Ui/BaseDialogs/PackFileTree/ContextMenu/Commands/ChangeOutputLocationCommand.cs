@@ -57,6 +57,7 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
 
             var outputPath = Path.ChangeExtension(saveDialogResult.FilePath, ".pack");
             container.PackFileSettings.SaveLocationPath = outputPath;
+            container.SaveSettings();
             _logger.Here().Information($"Changed output location for pack file container '{CommandLoggingHelper.DescribePack(container)}' to '{outputPath}'");
         }
     }

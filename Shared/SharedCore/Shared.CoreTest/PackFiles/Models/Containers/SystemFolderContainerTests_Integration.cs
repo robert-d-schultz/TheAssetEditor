@@ -43,27 +43,6 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             return new FileSystemAccess();
         }
 
-        private static Mock<IGlobalEventHub> CreateEventHubWithPackFileSettingsDispatch()
-        {
-            var eventHub = new Mock<IGlobalEventHub>();
-            var settingsChangedHandlers = new List<Action<PackFileSettingsChangedEvent>>();
-
-            eventHub.Setup(x => x.Register(It.IsAny<object>(), It.IsAny<Action<PackFileSettingsChangedEvent>>()))
-                .Callback<object, Action<PackFileSettingsChangedEvent>>((_, action) => settingsChangedHandlers.Add(action));
-
-            eventHub.Setup(x => x.UnRegister(It.IsAny<object>()))
-                .Callback<object>(_ => settingsChangedHandlers.Clear());
-
-            eventHub.Setup(x => x.PublishGlobalEvent(It.IsAny<PackFileSettingsChangedEvent>()))
-                .Callback<PackFileSettingsChangedEvent>(e =>
-                {
-                    foreach (var handler in settingsChangedHandlers.ToList())
-                        handler(e);
-                });
-
-            return eventHub;
-        }
-
         private static string GetDataFileFromWorkspace(string fileName)
         {
             var currentDirectory = TestContext.CurrentContext.TestDirectory;
@@ -89,45 +68,71 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         }
 
         [Test]
-        public void ProjectSettings_PersistsOutputPackFilePath()
+        public void ProjectSettings_PersistsSaveLocationPath()
         {
-            var eventHub = CreateEventHubWithPackFileSettingsDispatch();
+            var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
             var outputFolder = Path.Combine(_tempDir, "output");
             Directory.CreateDirectory(outputFolder);
             var outputPath = Path.Combine(outputFolder, "generated.pack");
 
-            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             container.PackFileSettings.SaveLocationPath = outputPath;
+            container.SaveSettings();
             container.Dispose();
 
-            var projectSettingsPath = Path.Combine(_tempDir, "project_ignore.json");
+            var projectSettingsPath = Path.Combine(_tempDir, "aeproject.json");
             Assert.That(File.Exists(projectSettingsPath), Is.True);
             var json = File.ReadAllText(projectSettingsPath);
-            Assert.That(json, Does.Contain("OutputPackFilePath"));
+            Assert.That(json, Does.Contain("SaveLocationPath"));
             Assert.That(json, Does.Contain("EnablePackFileCorruptionDetection"));
             Assert.That(json, Does.Contain("true"));
             Assert.That(json, Does.Contain(outputPath.Replace("\\", "\\\\")));
 
-            var reopened = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var reopened = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             Assert.That(reopened.PackFileSettings.SaveLocationPath, Is.EqualTo(outputPath));
             Assert.That(reopened.PackFileSettings.EnablePackFileCorruptionDetection, Is.True);
             reopened.Dispose();
         }
 
         [Test]
-        public void ProjectSettings_DefaultOutputPackFilePath_IsBesideProjectFolder()
+        public void ProjectSettings_DefaultSaveLocationPath_IsBesideProjectFolder()
         {
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
 
-            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
 
             Assert.That(container.PackFileSettings.SaveLocationPath, Is.EqualTo(Path.ChangeExtension(_tempDir, ".pack")));
             container.Dispose();
         }
+
+                [Test]
+                public void ProjectSettings_LegacyProjectIgnoreJson_LoadsAndWritesAeProjectJson()
+                {
+                        var fileSystem = CreateRealFileSystemAccess();
+                        var watcher = new Mock<IFileSystemWatcher>();
+                        var legacyOutputPath = Path.Combine(_tempDir, "legacy-output.pack");
+                        File.WriteAllText(Path.Combine(_tempDir, "project_ignore.json"), $$"""
+                        {
+                            "SaveLocationPath": "{{legacyOutputPath.Replace("\\", "\\\\")}}",
+                            "EnablePackFileCorruptionDetection": false,
+                            "IgnoredFilesWhenSerializing": [ "db\\ignored.tsv" ]
+                        }
+                        """);
+
+                        var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
+
+                        Assert.That(container.PackFileSettings.SaveLocationPath, Is.EqualTo(legacyOutputPath));
+                        Assert.That(container.PackFileSettings.EnablePackFileCorruptionDetection, Is.False);
+                        Assert.That(container.PackFileSettings.IgnoredFilesWhenSerializing, Does.Contain(@"db\ignored.tsv"));
+                        Assert.That(File.Exists(Path.Combine(_tempDir, "aeproject.json")), Is.True);
+                        Assert.That(container.ContainsFile("project_ignore.json"), Is.False);
+                        Assert.That(container.ContainsFile("aeproject.json"), Is.False);
+                        container.Dispose();
+                }
 
         [Test]
         public void ComplexFlow_SystemFolderProject_FromKarlPack_PersistsIgnoreSettings_AndSavesExpectedPack()
@@ -143,11 +148,11 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             karlContainer.IsCaPackFile = true;
             karlContainer.IsReadOnly = true;
 
-            var eventHub = CreateEventHubWithPackFileSettingsDispatch();
+            var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
 
-            var projectContainer = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var projectContainer = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             projectContainer.PackFileSettings.GameVersion = GameTypeEnum.Warhammer3;
 
             var pfs = new PackFileService(eventHub.Object);
@@ -173,6 +178,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
 
             var ignoredPath = PathNormalization.NormalizeFileName(@"new_folder\in_folder.txt");
             projectContainer.PackFileSettings.IgnoredFilesWhenSerializing.Add(ignoredPath);
+            projectContainer.SaveSettings();
 
             // Act: save and reload the pack
             var outputPackPath = Path.Combine(_tempDir, "complex_flow_output.pack");
@@ -207,7 +213,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
 
             var diskFiles = Directory.GetFiles(_tempDir, "*.*", SearchOption.AllDirectories)
                 .Select(x => PathNormalization.NormalizeFileName(Path.GetRelativePath(_tempDir, x)))
-                .Where(x => !string.Equals(x, "project_ignore.json", StringComparison.OrdinalIgnoreCase))
+                .Where(x => !string.Equals(x, "aeproject.json", StringComparison.OrdinalIgnoreCase))
                 .Where(x => !ignoredSet.Contains(x))
                 .Where(x => !x.EndsWith(".pack", StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -216,9 +222,9 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             packFiles.RemoveAll(IsCorruptionDetectionFile);
             Assert.That(diskFiles, Is.EquivalentTo(packFiles));
 
-            // Close + reopen project; ignore list should persist in project_ignore.json
+            // Close + reopen project; ignore list should persist in aeproject.json
             projectContainer.Dispose();
-            var reopened = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var reopened = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             Assert.That(reopened.PackFileSettings.IgnoredFilesWhenSerializing, Does.Contain(ignoredPath));
             reopened.Dispose();
         }
@@ -247,7 +253,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
-            var projectContainer = new SystemFolderContainer(projectDir, fileSystem, watcher.Object, eventHub.Object);
+            var projectContainer = new SystemFolderContainer(projectDir, fileSystem, watcher.Object);
             projectContainer.PackFileSettings.GameVersion = GameTypeEnum.Warhammer3;
 
             var pfs = new PackFileService(eventHub.Object);
@@ -308,7 +314,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
-            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             container.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             var pfs = new PackFileService(eventHub.Object);
@@ -357,7 +363,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
-            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             container.PackFileSettings.GameVersion = GameTypeEnum.Warhammer3;
 
             var saveDir = Path.Combine(_tempDir, "save-target");
@@ -399,7 +405,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
-            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
 
             var pfs = new PackFileService(eventHub.Object);
             pfs.MessageBoxProvider = new Mock<ISimpleMessageBox>().Object;
@@ -442,7 +448,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var watcher = new Mock<IFileSystemWatcher>();
 
             // Act: create container from real folder
-            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object);
             container.PackFileSettings.EnablePackFileCorruptionDetection = false;
             Assert.That(container.GetFileCount(), Is.EqualTo(1));
             Assert.That(container.FindFile(@"models\unit.txt"), Is.Not.Null);
@@ -503,7 +509,11 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var fileSystem = CreateRealFileSystemAccess();
             var mockWatcher = new Mock<IFileSystemWatcher>();
 
-            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
+            var pfs = new PackFileService(eventHub.Object);
+            pfs.MessageBoxProvider = new Mock<ISimpleMessageBox>().Object;
+            pfs.EnforceGameFilesMustBeLoaded = false;
+            pfs.AddContainer(container);
             Assert.That(container.GetFileCount(), Is.EqualTo(1));
 
             // Simulate an external file being created on disk
@@ -553,7 +563,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var fileSystem = CreateRealFileSystemAccess();
             var mockWatcher = new Mock<IFileSystemWatcher>();
 
-            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
             container.PackFileSettings.EnablePackFileCorruptionDetection = false;
             var pfs = new PackFileService(eventHub.Object);
             pfs.MessageBoxProvider = new Mock<ISimpleMessageBox>().Object;
@@ -597,7 +607,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var mockWatcher = new Mock<IFileSystemWatcher>();
 
             File.WriteAllText(Path.Combine(_tempDir, "existing.txt"), "existing");
-            var target = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var target = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
 
             // Create a source PackFileContainer
             var source = PackFileContainer.CreatePackFile("source");
@@ -634,7 +644,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var mockWatcher = new Mock<IFileSystemWatcher>();
 
             File.WriteAllText(Path.Combine(_tempDir, "initial.txt"), "initial");
-            var target = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var target = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
 
             var source = PackFileContainer.CreatePackFile("source"); 
             source.AddOrUpdateFile(@"data\added_file.bin", new PackFile("added_file.bin", new MemorySource(new byte[] { 1, 2, 3, 4 })));
@@ -690,7 +700,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 File.WriteAllText(absolutePath, $"content of {path}");
             }
 
-            var sysContainer = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var sysContainer = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
             sysContainer.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             // Create equivalent PackFileContainer
@@ -759,7 +769,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var mockWatcher = new Mock<IFileSystemWatcher>();
-            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
             container.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             // Expected ordering: ordinal, matching PackFileSortHelper.PathComparer / serializer
@@ -816,7 +826,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var mockWatcher = new Mock<IFileSystemWatcher>();
-            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
 
             Assert.That(container.GetFileCount(), Is.EqualTo(2));
 
@@ -842,7 +852,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var eventHub = new Mock<IGlobalEventHub>();
             var fileSystem = CreateRealFileSystemAccess();
             var mockWatcher = new Mock<IFileSystemWatcher>();
-            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object);
 
             var pfs = new PackFileService(eventHub.Object);
             pfs.MessageBoxProvider = new Mock<ISimpleMessageBox>().Object;

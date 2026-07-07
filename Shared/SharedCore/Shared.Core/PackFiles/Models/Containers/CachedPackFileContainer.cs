@@ -35,6 +35,11 @@ namespace Shared.Core.PackFiles.Models.Containers
         public PackFileContainerType ContainerType => PackFileContainerType.Database;
         public HashSet<string> SourcePackFilePaths { get; set; } = [];
 
+        public void SaveSettings()
+        {
+            PackFileSettings.Save();
+        }
+
         /// <summary>
         /// Creates a file-backed CachedPackFileContainer.
         /// </summary>

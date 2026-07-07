@@ -20,19 +20,17 @@ namespace Shared.Core.PackFiles.Utility
     public class SystemFolderContainerFactory : ISystemFolderContainerFactory
     {
         private readonly IFileSystemAccess _fileSystemAccess;
-        private readonly IGlobalEventHub _globalEventHub;
         private readonly Func<IFileSystemWatcher> _watcherFactory;
 
-        public SystemFolderContainerFactory(IFileSystemAccess fileSystemAccess, IGlobalEventHub globalEventHub, Func<IFileSystemWatcher> watcherFactory)
+        public SystemFolderContainerFactory(IFileSystemAccess fileSystemAccess, Func<IFileSystemWatcher> watcherFactory)
         {
             _fileSystemAccess = fileSystemAccess;
-            _globalEventHub = globalEventHub;
             _watcherFactory = watcherFactory;
         }
 
         public IPackFileContainer Create(string folderPath)
         {
-            return new SystemFolderContainer(folderPath, _fileSystemAccess, _watcherFactory(), _globalEventHub);
+            return new SystemFolderContainer(folderPath, _fileSystemAccess, _watcherFactory());
         }
     }
 
@@ -73,7 +71,10 @@ namespace Shared.Core.PackFiles.Utility
 
             var container = _systemFolderContainerFactory.Create(packFileSystemPath);
             if (container.PackFileSettings.GameVersion == null)
+            {
                 container.PackFileSettings.GameVersion = _settingsService.CurrentSettings.CurrentGame;
+                container.SaveSettings();
+            }
             return container;
         }
 
@@ -82,6 +83,7 @@ namespace Shared.Core.PackFiles.Utility
             var packfileName = Path.GetFileNameWithoutExtension(packFilePath);
             var container = CreateFromCollection(type, packFilePath, [packFilePath], packfileName, loadAsReadOnly, new CustomPackDuplicateFileResolver());
             container.PackFileSettings.GameVersion = _settingsService.CurrentSettings.CurrentGame;
+            container.SaveSettings();
             return container;
         }
 
@@ -114,6 +116,7 @@ namespace Shared.Core.PackFiles.Utility
             var container = CreateFromCollection(PackFileContainerType.Database, gameDataFolder, fullPackFilePaths, $"All Game Packs - {gameName}", true, packfileResolver);
             container.IsCaPackFile = true;
             container.PackFileSettings.GameVersion = gameEnum;
+            container.SaveSettings();
             return container;
         }
 

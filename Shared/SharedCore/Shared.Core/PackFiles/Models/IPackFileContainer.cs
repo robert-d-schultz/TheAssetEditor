@@ -16,6 +16,7 @@
         PackFileSettings PackFileSettings { get; }
         PackFileContainerType ContainerType { get; }
 
+        void SaveSettings();
 
         int GetFileCount();
         PackFile? FindFile(string path);

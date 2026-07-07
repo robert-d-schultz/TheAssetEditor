@@ -44,7 +44,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             _mockWatcher = new Mock<IFileSystemWatcher>();
             _mockEventHub = new Mock<IGlobalEventHub>();
 
-            _container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            _container = CreateContainer();
         }
 
         [TearDown]
@@ -53,6 +53,14 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             _container.Dispose();
             if (Directory.Exists(_tempDir))
                 Directory.Delete(_tempDir, true);
+        }
+
+        private SystemFolderContainer CreateContainer()
+        {
+            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object);
+            container.FilesAddedExternally += (_, e) => _mockEventHub.Object.PublishGlobalEvent(new PackFileContainerFilesAddedEvent(container, e.Files));
+            container.FilesRemovedExternally += (_, e) => _mockEventHub.Object.PublishGlobalEvent(new PackFileContainerFilesRemovedEvent(container, e.Files));
+            return container;
         }
 
         [Test]
@@ -248,7 +256,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .Returns([Path.Combine(_tempDir, "existing.txt"), file1, file2]);
             _mockWatcher = new Mock<IFileSystemWatcher>();
             _mockEventHub = new Mock<IGlobalEventHub>();
-            _container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            _container = CreateContainer();
 
             Assert.That(_container.GetFileCount(), Is.EqualTo(3));
 
@@ -282,7 +290,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .Returns([Path.Combine(_tempDir, "existing.txt"), oldFile]);
             _mockWatcher = new Mock<IFileSystemWatcher>();
             _mockEventHub = new Mock<IGlobalEventHub>();
-            _container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            _container = CreateContainer();
 
             Assert.That(_container.GetFileCount(), Is.EqualTo(2));
 
@@ -323,7 +331,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .Returns([Path.Combine(_tempDir, "existing.txt"), oldFile]);
             _mockWatcher = new Mock<IFileSystemWatcher>();
             _mockEventHub = new Mock<IGlobalEventHub>();
-            _container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            _container = CreateContainer();
 
             // Rename on disk
             var newFile = Path.Combine(subDir, "normal.dds");
@@ -361,7 +369,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .Returns([file1, file2]);
             _mockWatcher = new Mock<IFileSystemWatcher>();
             _mockEventHub = new Mock<IGlobalEventHub>();
-            _container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            _container = CreateContainer();
 
             // Simulate rapid deletes
             _mockWatcher.Raise(w => w.Deleted += null, new FileSystemEventArgs(WatcherChangeTypes.Deleted, _tempDir, "a.txt"));
@@ -474,7 +482,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .Returns([Path.Combine(_tempDir, "existing.txt"), child]);
             _mockWatcher = new Mock<IFileSystemWatcher>();
             _mockEventHub = new Mock<IGlobalEventHub>();
-            _container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            _container = CreateContainer();
 
             // Both a folder delete and the child file delete arrive in the same batch.
             _mockWatcher.Raise(w => w.Deleted += null, new FileSystemEventArgs(WatcherChangeTypes.Deleted, _tempDir, "folder"));

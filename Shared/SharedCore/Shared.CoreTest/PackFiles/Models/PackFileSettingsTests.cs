@@ -1,7 +1,9 @@
+using System.Collections.ObjectModel;
+using System.Text;
+using System.Text.Json;
 using Moq;
-using Shared.Core.Events;
-using Shared.Core.PackFiles.Events;
 using Shared.Core.PackFiles.Models;
+using Shared.Core.Services;
 using Shared.Core.Settings;
 
 namespace Shared.CoreTest.PackFiles.Models
@@ -10,63 +12,103 @@ namespace Shared.CoreTest.PackFiles.Models
     internal class PackFileSettingsTests
     {
         [Test]
-        public void SaveLocationPath_WhenChanged_PublishesSettingsChangedEvent()
+        public void Save_WhenSerializeToDiskFalse_DoesNotWriteSettingsFile()
         {
-            var eventHub = new Mock<IGlobalEventHub>();
-            var settings = new PackFileSettings();
-            settings.SetEventHub(eventHub.Object);
+            var fileSystem = new Mock<IFileSystemAccess>();
+            var settings = new PackFileSettings
+            {
+                SerializeToDisk = false,
+                SaveLocationPath = @"c:\output\test.pack"
+            };
 
-            settings.SaveLocationPath = @"c:\output\test.pack";
+            settings.Save(@"c:\project\aeproject.json", fileSystem.Object);
 
-            eventHub.Verify(x => x.PublishGlobalEvent(It.Is<PackFileSettingsChangedEvent>(e => ReferenceEquals(e.Settings, settings))), Times.Once);
+            fileSystem.Verify(x => x.FileWriteAllBytes(It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
         }
 
         [Test]
-        public void GameVersion_WhenChanged_PublishesSettingsChangedEvent()
+        public void Save_WhenSerializeToDiskTrue_WritesPackFileSettingsJson()
         {
-            var eventHub = new Mock<IGlobalEventHub>();
-            var settings = new PackFileSettings();
-            settings.SetEventHub(eventHub.Object);
+            var fileSystem = new Mock<IFileSystemAccess>();
+            byte[]? savedBytes = null;
+            fileSystem.Setup(x => x.FileWriteAllBytes(@"c:\project\aeproject.json", It.IsAny<byte[]>()))
+                .Callback<string, byte[]>((_, bytes) => savedBytes = bytes);
+            var settings = new PackFileSettings
+            {
+                SerializeToDisk = true,
+                SaveLocationPath = @"c:\output\test.pack",
+                GameVersion = GameTypeEnum.Warhammer3,
+                EnablePackFileCorruptionDetection = true,
+                IgnoredFilesWhenSerializing = new ObservableCollection<string>([@"Folder/IGNORE.txt", @"folder\ignore.txt", ""])
+            };
 
-            settings.GameVersion = GameTypeEnum.Warhammer3;
+            settings.Save(@"c:\project\aeproject.json", fileSystem.Object);
 
-            eventHub.Verify(x => x.PublishGlobalEvent(It.Is<PackFileSettingsChangedEvent>(e => ReferenceEquals(e.Settings, settings))), Times.Once);
+            Assert.That(savedBytes, Is.Not.Null);
+            var json = Encoding.UTF8.GetString(savedBytes!);
+            Assert.That(json, Does.Contain("SaveLocationPath"));
+            Assert.That(json, Does.Contain("EnablePackFileCorruptionDetection"));
+            Assert.That(json, Does.Contain("Warhammer3"));
+            Assert.That(json, Does.Contain(@"folder\\ignore.txt"));
+            Assert.That(json, Does.Not.Contain("SerializeToDisk"));
         }
 
         [Test]
-        public void IgnoredFilesWhenSerializing_WhenCollectionChanges_PublishesSettingsChangedEvent()
+        public void Load_ReadsSerializedPackFileSettings()
         {
-            var eventHub = new Mock<IGlobalEventHub>();
-            var settings = new PackFileSettings();
-            settings.SetEventHub(eventHub.Object);
+            var fileSystem = new Mock<IFileSystemAccess>();
+            var json = """
+            {
+              "SaveLocationPath": "c:\\output\\test.pack",
+              "GameVersion": "Warhammer3",
+              "EnablePackFileCorruptionDetection": true,
+              "IgnoredFilesWhenSerializing": [ "db\\ignored.tsv" ]
+            }
+            """;
+            fileSystem.Setup(x => x.FileReadAllBytes(@"c:\project\aeproject.json"))
+                .Returns(Encoding.UTF8.GetBytes(json));
 
-            settings.IgnoredFilesWhenSerializing.Add(@"db\ignored.tsv");
+            var loaded = PackFileSettings.Load(@"c:\project\aeproject.json", fileSystem.Object);
 
-            eventHub.Verify(x => x.PublishGlobalEvent(It.Is<PackFileSettingsChangedEvent>(e => ReferenceEquals(e.Settings, settings))), Times.Once);
+            Assert.That(loaded, Is.Not.Null);
+            Assert.That(loaded!.SaveLocationPath, Is.EqualTo(@"c:\output\test.pack"));
+            Assert.That(loaded.GameVersion, Is.EqualTo(GameTypeEnum.Warhammer3));
+            Assert.That(loaded.EnablePackFileCorruptionDetection, Is.True);
+            Assert.That(loaded.IgnoredFilesWhenSerializing, Does.Contain(@"db\ignored.tsv"));
+            Assert.That(loaded.SerializeToDisk, Is.False);
         }
 
         [Test]
-        public void EnablePackFileCorruptionDetection_WhenChanged_PublishesSettingsChangedEvent()
+        public void Load_ReadsLegacyOutputPackFilePath()
         {
-            var eventHub = new Mock<IGlobalEventHub>();
-            var settings = new PackFileSettings();
-            settings.SetEventHub(eventHub.Object);
+            var fileSystem = new Mock<IFileSystemAccess>();
+            var json = """
+            {
+              "OutputPackFilePath": "c:\\output\\legacy.pack",
+              "EnablePackFileCorruptionDetection": true
+            }
+            """;
+            fileSystem.Setup(x => x.FileReadAllBytes(@"c:\project\project_ignore.json"))
+                .Returns(Encoding.UTF8.GetBytes(json));
 
-            settings.EnablePackFileCorruptionDetection = true;
+            var loaded = PackFileSettings.Load(@"c:\project\project_ignore.json", fileSystem.Object);
 
-            eventHub.Verify(x => x.PublishGlobalEvent(It.Is<PackFileSettingsChangedEvent>(e => ReferenceEquals(e.Settings, settings))), Times.Once);
+            Assert.That(loaded, Is.Not.Null);
+            Assert.That(loaded!.SaveLocationPath, Is.EqualTo(@"c:\output\legacy.pack"));
         }
 
         [Test]
-        public void UnchangedValue_DoesNotPublishSettingsChangedEvent()
+        public void ApplySerializedSettings_NormalizesIgnoredFiles()
         {
-            var eventHub = new Mock<IGlobalEventHub>();
-            var settings = new PackFileSettings { SaveLocationPath = @"c:\output\test.pack" };
-            settings.SetEventHub(eventHub.Object);
+            var target = new PackFileSettings();
+            var source = new PackFileSettings
+            {
+                IgnoredFilesWhenSerializing = new ObservableCollection<string>([@"Folder/IGNORE.txt", @"folder\ignore.txt", ""])
+            };
 
-            settings.SaveLocationPath = @"c:\output\test.pack";
+            target.ApplySerializedSettings(source);
 
-            eventHub.Verify(x => x.PublishGlobalEvent(It.IsAny<PackFileSettingsChangedEvent>()), Times.Never);
+            Assert.That(target.IgnoredFilesWhenSerializing, Is.EqualTo(new[] { @"folder\ignore.txt" }));
         }
     }
 }

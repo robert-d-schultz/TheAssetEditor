@@ -1,10 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using Shared.Core.Events;
 using Shared.Core.Misc;
-using Shared.Core.PackFiles.Events;
 using Shared.Core.PackFiles.Models.FileSources;
 using Shared.Core.PackFiles.Serialization;
 using Shared.Core.PackFiles.Utility;
@@ -16,28 +12,22 @@ namespace Shared.Core.PackFiles.Models.Containers
     public class SystemFolderContainer : IPackFileContainerInternal, IDisposable
     {
         private static readonly ILogger _logger = Logging.Create<SystemFolderContainer>();
-        private const string ProjectSettingsFileName = "project_ignore.json";
+        private const string ProjectSettingsFileName = "aeproject.json";
+        private const string LegacyProjectSettingsFileName = "project_ignore.json";
         private static readonly IReadOnlyList<(string Path, string Content)> PackFileCorruptionDetectionFiles =
         [
             (@"!!!packfile_corruction_detection\packfile_corruction_detection_1.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 1"),
             (@"packfile_corruction_detection\packfile_corruction_detection_2.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 2"),
             (@"zzzz_packfile_corruction_detection\packfile_corruction_detection_3.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 3")
         ];
-        private static readonly JsonSerializerOptions ProjectSettingsJsonOptions = new()
-        {
-            WriteIndented = true,
-            Converters = { new JsonStringEnumConverter() }
-        };
 
         private readonly IFileSystemAccess _fileSystemAccess;
         private readonly IFileSystemWatcher? _watcher;
-        private readonly IGlobalEventHub? _eventHub;
         private readonly SynchronizationContext? _syncContext;
         private readonly Dictionary<string, PackFile> _fileList = new();
         private readonly List<FileSystemEventArgs> _pendingEvents = new();
         private Timer? _debounceTimer;
         internal volatile bool _suppressWatcher = false;
-        private bool _isApplyingProjectSettings = false;
         private bool _disposed = false;
 
         public string Name { get; set; }
@@ -46,8 +36,10 @@ namespace Shared.Core.PackFiles.Models.Containers
         public string? SystemFilePath { get; }
         public PackFileSettings PackFileSettings { get; } = new();
         public PackFileContainerType ContainerType => PackFileContainerType.SystemFolder;
+        internal event EventHandler<SystemFolderContainerFilesChangedEventArgs>? FilesAddedExternally;
+        internal event EventHandler<SystemFolderContainerFilesChangedEventArgs>? FilesRemovedExternally;
 
-        public SystemFolderContainer(string folderPath, IFileSystemAccess fileSystemAccess, IFileSystemWatcher? watcher = null, IGlobalEventHub? eventHub = null, SynchronizationContext? syncContext = null)
+        public SystemFolderContainer(string folderPath, IFileSystemAccess fileSystemAccess, IFileSystemWatcher? watcher = null, SynchronizationContext? syncContext = null)
         {
             if (string.IsNullOrWhiteSpace(folderPath))
                 throw new ArgumentException("Folder path cannot be empty.", nameof(folderPath));
@@ -56,16 +48,15 @@ namespace Shared.Core.PackFiles.Models.Containers
 
             _fileSystemAccess = fileSystemAccess;
             _watcher = watcher;
-            _eventHub = eventHub;
             _syncContext = syncContext ?? SynchronizationContext.Current;
             SystemFilePath = folderPath;
             PackFileSettings.SaveLocationPath = GetDefaultOutputPackPath(folderPath);
             PackFileSettings.EnablePackFileCorruptionDetection = true;
+            PackFileSettings.SerializeToDisk = true;
 
             LoadProjectSettingsFromDisk();
             EnsureProjectSettingsFileIsIgnored();
-            PackFileSettings.SetEventHub(eventHub);
-            eventHub?.Register<PackFileSettingsChangedEvent>(this, OnPackFileSettingsChanged);
+            SaveSettings();
 
             Name = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
@@ -90,12 +81,17 @@ namespace Shared.Core.PackFiles.Models.Containers
         }
 
         private string GetProjectSettingsFilePath() => Path.Combine(SystemFilePath!, ProjectSettingsFileName);
+        private string GetLegacyProjectSettingsFilePath() => Path.Combine(SystemFilePath!, LegacyProjectSettingsFileName);
 
         private static bool IsProjectSettingsFilePath(string normalizedRelativePath)
         {
             return string.Equals(
                 normalizedRelativePath,
                 PathNormalization.NormalizeFileName(ProjectSettingsFileName),
+                StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                normalizedRelativePath,
+                PathNormalization.NormalizeFileName(LegacyProjectSettingsFileName),
                 StringComparison.OrdinalIgnoreCase);
         }
 
@@ -110,81 +106,36 @@ namespace Shared.Core.PackFiles.Models.Containers
         {
             var projectSettingsPath = GetProjectSettingsFilePath();
             if (!_fileSystemAccess.FileExists(projectSettingsPath))
+                projectSettingsPath = GetLegacyProjectSettingsFilePath();
+
+            if (!_fileSystemAccess.FileExists(projectSettingsPath))
                 return;
 
             try
             {
-                var settingsBytes = _fileSystemAccess.FileReadAllBytes(projectSettingsPath);
-                var json = Encoding.UTF8.GetString(settingsBytes);
-                var settings = JsonSerializer.Deserialize<SystemFolderProjectSettings>(json, ProjectSettingsJsonOptions);
+                var settings = PackFileSettings.Load(projectSettingsPath, _fileSystemAccess);
                 if (settings == null)
                     return;
 
-                _isApplyingProjectSettings = true;
-                if (!string.IsNullOrWhiteSpace(settings.OutputPackFilePath))
-                    PackFileSettings.SaveLocationPath = settings.OutputPackFilePath;
-
-                PackFileSettings.EnablePackFileCorruptionDetection = settings.EnablePackFileCorruptionDetection;
-                PackFileSettings.GameVersion = settings.GameVersion;
-
-                var normalizedIgnoredFiles = (settings.IgnoredFilesWhenSerializing ?? [])
-                    .Where(x => string.IsNullOrWhiteSpace(x) == false)
-                    .Select(PathNormalization.NormalizeFileName)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                PackFileSettings.IgnoredFilesWhenSerializing = new ObservableCollection<string>(normalizedIgnoredFiles);
+                PackFileSettings.ApplySerializedSettings(settings);
             }
             catch (Exception ex)
             {
                 _logger.Here().Warning("Failed to load system-folder project settings from {FilePath}. Error: {ErrorMessage}", projectSettingsPath, ex.Message);
             }
-            finally
-            {
-                _isApplyingProjectSettings = false;
-            }
         }
 
-        private void SaveProjectSettingsToDisk()
+        public void SaveSettings()
         {
             var projectSettingsPath = GetProjectSettingsFilePath();
             try
             {
-                var ignoredFiles = PackFileSettings.IgnoredFilesWhenSerializing
-                    .Where(x => string.IsNullOrWhiteSpace(x) == false)
-                    .Select(PathNormalization.NormalizeFileName)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                if (!ignoredFiles.Contains(PathNormalization.NormalizeFileName(ProjectSettingsFileName), StringComparer.OrdinalIgnoreCase))
-                    ignoredFiles.Add(PathNormalization.NormalizeFileName(ProjectSettingsFileName));
-
-                var settings = new SystemFolderProjectSettings
-                {
-                    OutputPackFilePath = PackFileSettings.SaveLocationPath,
-                    EnablePackFileCorruptionDetection = PackFileSettings.EnablePackFileCorruptionDetection,
-                    GameVersion = PackFileSettings.GameVersion,
-                    IgnoredFilesWhenSerializing = ignoredFiles
-                };
-
-                var json = JsonSerializer.Serialize(settings, ProjectSettingsJsonOptions);
-                _fileSystemAccess.FileWriteAllBytes(projectSettingsPath, Encoding.UTF8.GetBytes(json));
+                PackFileSettings.Save(projectSettingsPath, _fileSystemAccess);
             }
             catch (Exception ex)
             {
                 _logger.Here().Warning("Failed to save system-folder project settings to {FilePath}. Error: {ErrorMessage}", projectSettingsPath, ex.Message);
             }
-        }
-
-        private void OnPackFileSettingsChanged(PackFileSettingsChangedEvent settingsChangedEvent)
-        {
-            if (!ReferenceEquals(settingsChangedEvent.Settings, PackFileSettings))
-                return;
-
-            if (_disposed || _isApplyingProjectSettings)
-                return;
-
-            SaveProjectSettingsToDisk();
         }
 
         // --- IPackFileContainer read operations ---
@@ -695,14 +646,14 @@ namespace Shared.Core.PackFiles.Models.Containers
             var distinctKeysToRemove = keysToRemove.Distinct().ToList();
             var removedFiles = distinctKeysToRemove.Select(k => _fileList[k]).ToList();
             if (removedFiles.Count > 0)
-                _eventHub?.PublishGlobalEvent(new PackFileContainerFilesRemovedEvent(this, removedFiles));
+                FilesRemovedExternally?.Invoke(this, new SystemFolderContainerFilesChangedEventArgs(removedFiles));
 
             // Now actually remove the entries
             foreach (var key in distinctKeysToRemove)
                 _fileList.Remove(key);
 
             if (addedFiles.Count > 0)
-                _eventHub?.PublishGlobalEvent(new PackFileContainerFilesAddedEvent(this, addedFiles));
+                FilesAddedExternally?.Invoke(this, new SystemFolderContainerFilesChangedEventArgs(addedFiles));
         }
 
         private void HandleExternalCreated(string absolutePath, List<PackFile> addedFiles)
@@ -800,18 +751,14 @@ namespace Shared.Core.PackFiles.Models.Containers
                 _watcher.EnableRaisingEvents = false;
                 _watcher.Dispose();
             }
-            _eventHub?.UnRegister(this);
             _debounceTimer?.Dispose();
             _debounceTimer = null;
             _fileList.Clear();
         }
+    }
 
-        private class SystemFolderProjectSettings
-        {
-            public string? OutputPackFilePath { get; set; }
-            public bool EnablePackFileCorruptionDetection { get; set; } = true;
-            public GameTypeEnum? GameVersion { get; set; }
-            public List<string>? IgnoredFilesWhenSerializing { get; set; }
-        }
+    internal class SystemFolderContainerFilesChangedEventArgs(List<PackFile> files) : EventArgs
+    {
+        public List<PackFile> Files { get; } = files;
     }
 }

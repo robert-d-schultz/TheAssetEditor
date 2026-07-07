@@ -72,6 +72,12 @@ namespace Shared.Core.PackFiles
         void AddContainerInternal(IPackFileContainerInternal container, bool setToMainPackIfFirst = false)
         {
             _packFileContainers.Add(container);
+            if (container is SystemFolderContainer systemFolderContainer)
+            {
+                systemFolderContainer.FilesAddedExternally += OnSystemFolderContainerFilesAddedExternally;
+                systemFolderContainer.FilesRemovedExternally += OnSystemFolderContainerFilesRemovedExternally;
+            }
+
             var notCaPacksLoaded = _packFileContainers.Count(x => !x.IsCaPackFile);
             _logger.Here().Information($"Added pack file container '{DescribeContainer(container)}' (CA:{container.IsCaPackFile}). Loaded containers: {_packFileContainers.Count}, editable containers: {notCaPacksLoaded}");
             _globalEventHub?.PublishGlobalEvent(new PackFileContainerAddedEvent(container));
@@ -161,6 +167,12 @@ namespace Shared.Core.PackFiles
                 return;
             }
 
+            if (container is SystemFolderContainer systemFolderContainer)
+            {
+                systemFolderContainer.FilesAddedExternally -= OnSystemFolderContainerFilesAddedExternally;
+                systemFolderContainer.FilesRemovedExternally -= OnSystemFolderContainerFilesRemovedExternally;
+            }
+
             _packFileContainers.Remove(container);
             if (_packFileContainerSelectedForEdit == container)
                 SetEditablePack(null);
@@ -170,6 +182,18 @@ namespace Shared.Core.PackFiles
 
             if (container is IDisposable disposable)
                 disposable.Dispose();
+        }
+
+        private void OnSystemFolderContainerFilesAddedExternally(object? sender, SystemFolderContainerFilesChangedEventArgs e)
+        {
+            if (sender is IPackFileContainer container)
+                _globalEventHub?.PublishGlobalEvent(new PackFileContainerFilesAddedEvent(container, e.Files));
+        }
+
+        private void OnSystemFolderContainerFilesRemovedExternally(object? sender, SystemFolderContainerFilesChangedEventArgs e)
+        {
+            if (sender is IPackFileContainer container)
+                _globalEventHub?.PublishGlobalEvent(new PackFileContainerFilesRemovedEvent(container, e.Files));
         }
 
         public List<(string FileName, PackFile Pack)> FindAllWithExtention(string extention, IPackFileContainer? pf = null)

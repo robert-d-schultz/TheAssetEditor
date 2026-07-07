@@ -15,7 +15,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             if (IsSystemFolderContainer)
             {
                 Assert.That(_container.SystemFilePath, Does.StartWith(Path.GetTempPath().TrimEnd('\\')));
-                Assert.That(_container.PackFileSettings.SaveLocationPath, Is.EqualTo(_container.SystemFilePath));
+                Assert.That(_container.PackFileSettings.SaveLocationPath, Is.EqualTo(Path.ChangeExtension(_container.SystemFilePath, ".pack")));
                 return;
             }
 

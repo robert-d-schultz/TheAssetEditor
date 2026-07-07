@@ -46,6 +46,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
             command.Execute();
 
             Assert.That(settings.SaveLocationPath, Is.EqualTo(@"c:\new\project_output.pack"));
+            container.Verify(x => x.SaveSettings(), Times.Once);
         }
 
         [Test]
@@ -64,6 +65,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
             command.Execute();
 
             Assert.That(settings.SaveLocationPath, Is.EqualTo(@"c:\old\project.pack"));
+            container.Verify(x => x.SaveSettings(), Times.Never);
         }
 
         private static Mock<IPackFileContainer> CreateSystemFolderContainer(PackFileContainerType containerType = PackFileContainerType.SystemFolder, PackFileSettings? settings = null)

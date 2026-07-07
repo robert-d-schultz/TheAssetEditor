@@ -212,7 +212,6 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         public void B2_SaveIntoWatchedFolder_DoesNotIngestOwnPack()
         {
             var mockWatcher = new Mock<IFileSystemWatcher>();
-            var eventHub = new Mock<IGlobalEventHub>();
             var outputPath = Path.Combine(_tempDir, "selfsave.pack");
 
             // Simulate the OS watcher firing a Created event for the new pack while the
@@ -225,7 +224,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                         new FileSystemEventArgs(WatcherChangeTypes.Created, _tempDir, Path.GetFileName(d)));
                 });
 
-            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, mockWatcher.Object, eventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, mockWatcher.Object);
             try
             {
                 var initialCount = container.GetFileCount();
@@ -236,7 +235,6 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 Assert.That(container.ContainsFile("selfsave.pack"), Is.False,
                     "The saved .pack must not be ingested into its own container.");
                 Assert.That(container.GetFileCount(), Is.EqualTo(initialCount));
-                eventHub.Verify(x => x.PublishGlobalEvent(It.IsAny<PackFileContainerFilesAddedEvent>()), Times.Never);
             }
             finally
             {

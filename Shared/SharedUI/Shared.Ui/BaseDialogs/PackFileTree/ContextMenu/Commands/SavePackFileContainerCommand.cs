@@ -120,7 +120,10 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
 
             systemPath = Path.ChangeExtension(saveDialogResult.FilePath, ".pack");
             if (container.ContainerType == PackFileContainerType.SystemFolder)
+            {
                 container.PackFileSettings.SaveLocationPath = systemPath;
+                container.SaveSettings();
+            }
 
             return systemPath;
         }

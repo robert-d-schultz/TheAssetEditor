@@ -1,5 +1,4 @@
 ﻿using Moq;
-using Shared.Core.Events;
 using Shared.Core.PackFiles.Models.Containers;
 using Shared.Core.PackFiles.Utility;
 using Shared.Core.Services;
@@ -12,7 +11,6 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         private string _tempDir = null!;
         private Mock<IFileSystemAccess> _fileSystemAccess = null!;
         private Mock<IFileSystemWatcher> _mockWatcher = null!;
-        private Mock<IGlobalEventHub> _mockEventHub = null!;
 
         [SetUp]
         public void Setup()
@@ -29,7 +27,6 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .Returns([seedPath]);
 
             _mockWatcher = new Mock<IFileSystemWatcher>();
-            _mockEventHub = new Mock<IGlobalEventHub>();
         }
 
         [TearDown]
@@ -42,7 +39,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         [Test]
         public void Dispose_StopsRaisingEvents()
         {
-            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object);
 
             container.Dispose();
 
@@ -52,7 +49,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         [Test]
         public void Dispose_DisposesWatcher()
         {
-            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object);
 
             container.Dispose();
 
@@ -62,7 +59,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         [Test]
         public void Dispose_ClearsFileList()
         {
-            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object);
             Assert.That(container.GetFileCount(), Is.GreaterThan(0));
 
             container.Dispose();
@@ -73,7 +70,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         [Test]
         public void Dispose_CalledTwice_NoException()
         {
-            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _mockEventHub.Object);
+            var container = new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object);
 
             container.Dispose();
             Assert.DoesNotThrow(() => container.Dispose());

@@ -68,7 +68,7 @@ namespace Shared.CoreTest.PackFiles
 
         private SystemFolderContainer CreateContainer()
         {
-            return new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object, _eventHub.Object);
+            return new SystemFolderContainer(_tempDir, _fileSystemAccess.Object, _mockWatcher.Object);
         }
 
         [Test]

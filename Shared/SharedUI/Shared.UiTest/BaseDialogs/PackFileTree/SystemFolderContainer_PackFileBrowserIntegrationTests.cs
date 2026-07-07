@@ -484,6 +484,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree
             SeedFile(@"animations\idle.anim", "anim data");
             SeedFile(@"models\hero.rmv2", "mesh data");
             SeedFile(@"textures\skin.dds", "tex data");
+            _container.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             // Save to .pack
             var packPath = Path.Combine(_tempDir, "output.pack");
@@ -734,9 +735,8 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree
         {
             _mockWatcher = new Mock<IFileSystemWatcher>();
             var fileSystemAccess = new FileSystemAccess();
-            var eventHub = _runner.ServiceProvider.GetRequiredService<IGlobalEventHub>();
 
-            _container = new SystemFolderContainer(_tempDir, fileSystemAccess, _mockWatcher.Object, eventHub);
+            _container = new SystemFolderContainer(_tempDir, fileSystemAccess, _mockWatcher.Object);
             _packFileService.AddContainer(_container);
             _packFileService.SetEditablePack(_container);
 
@@ -761,8 +761,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree
 
                 // Recreate
                 var fileSystemAccess = new FileSystemAccess();
-                var eventHub = _runner.ServiceProvider.GetRequiredService<IGlobalEventHub>();
-                _container = new SystemFolderContainer(_tempDir, fileSystemAccess, _mockWatcher.Object, eventHub);
+                _container = new SystemFolderContainer(_tempDir, fileSystemAccess, _mockWatcher.Object);
                 _packFileService.AddContainer(_container);
                 _packFileService.SetEditablePack(_container);
                 _rootNode = _viewModel.Files.First(x => x.Owner == _container);

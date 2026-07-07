@@ -39,6 +39,11 @@ namespace Shared.Core.PackFiles.Models.Containers
             Header = new PFHeader(versionStr, PackFileCAType.MOD);
         }
 
+        public void SaveSettings()
+        {
+            PackFileSettings.Save();
+        }
+
         public static PackFileContainer CreateCaPackFile(string name, string? systemFilePath = null, PackFileVersion version = PackFileVersion.PFH5)
         {
             return new PackFileContainer(name, version)

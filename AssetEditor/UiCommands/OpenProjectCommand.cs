@@ -39,7 +39,10 @@ namespace AssetEditor.UiCommands
 
             var container = _systemFolderContainerFactory.Create(dialog.SelectedPath);
             if (container.PackFileSettings.GameVersion == null)
+            {
                 container.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
+                container.SaveSettings();
+            }
             _packFileService.AddContainer(container);
             _packFileService.SetEditablePack(container);
         }

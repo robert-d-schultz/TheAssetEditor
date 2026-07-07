@@ -14,7 +14,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
         {
             var settings = new PackFileSettings();
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -27,7 +27,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
         {
             var settings = new PackFileSettings();
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var dirNode = CreateNodePath(root, "folder", NodeType.Directory);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -40,7 +40,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
         {
             var settings = new PackFileSettings();
             var container = CreateContainer(PackFileContainerType.Normal, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -53,7 +53,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
         {
             var settings = new PackFileSettings();
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -67,7 +67,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
             var settings = new PackFileSettings();
             settings.IgnoredFilesWhenSerializing.Add("folder\\file.txt");
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -81,7 +81,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
             var settings = new PackFileSettings();
             settings.IgnoredFilesWhenSerializing.Add("folder/file.txt");
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -94,7 +94,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
         {
             var settings = new PackFileSettings();
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var command = new ToggleIgnoredForSerializationCommand(MockScopedLogger.Create());
@@ -105,6 +105,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
 
             command.Execute();
             Assert.That(settings.IgnoredFilesWhenSerializing.Contains("folder\\file.txt", StringComparer.OrdinalIgnoreCase), Is.False);
+            container.Verify(x => x.SaveSettings(), Times.Exactly(2));
         }
 
         [Test]
@@ -112,7 +113,7 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
         {
             var settings = new PackFileSettings();
             var container = CreateContainer(PackFileContainerType.SystemFolder, settings);
-            var root = CreateRoot(container);
+            var root = CreateRoot(container.Object);
             var fileNode = CreateNodePath(root, "folder\\file.txt", NodeType.File);
 
             var changedProperties = new List<string?>();
@@ -126,14 +127,14 @@ namespace Shared.UiTest.BaseDialogs.PackFileTree.ContextMenu.Commands
             Assert.That(changedProperties, Does.Contain("IconNode"));
         }
 
-        private static IPackFileContainer CreateContainer(PackFileContainerType containerType, PackFileSettings settings)
+        private static Mock<IPackFileContainer> CreateContainer(PackFileContainerType containerType, PackFileSettings settings)
         {
             var container = new Mock<IPackFileContainer>();
             container.SetupGet(x => x.Name).Returns("container");
             container.SetupGet(x => x.SystemFilePath).Returns("C:\\temp\\project");
             container.SetupGet(x => x.ContainerType).Returns(containerType);
             container.SetupGet(x => x.PackFileSettings).Returns(settings);
-            return container.Object;
+            return container;
         }
     }
 }

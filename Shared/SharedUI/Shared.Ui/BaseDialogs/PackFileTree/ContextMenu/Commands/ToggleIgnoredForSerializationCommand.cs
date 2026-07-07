@@ -53,6 +53,8 @@ namespace Shared.Ui.BaseDialogs.PackFileTree.ContextMenu.Commands
                 _logger.Here().Information("Added '{Path}' to IgnoredFilesWhenSerializing in '{Pack}'", normalizedPath, CommandLoggingHelper.DescribePack(container));
             }
 
+            container.SaveSettings();
+
             // Refresh node visual state so icon converter re-evaluates.
             _node.NotifyNodeVisualChanged();
         }

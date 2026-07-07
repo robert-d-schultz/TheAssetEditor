@@ -73,7 +73,10 @@ namespace AssetEditor.UiCommands
             // Step 4: Open the extracted folder as a SystemFolderContainer
             var systemContainer = _systemFolderContainerFactory.Create(destinationFolder);
             if (systemContainer.PackFileSettings.GameVersion == null)
+            {
                 systemContainer.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
+                systemContainer.SaveSettings();
+            }
             _packFileService.AddContainer(systemContainer);
             _packFileService.SetEditablePack(systemContainer);
 
