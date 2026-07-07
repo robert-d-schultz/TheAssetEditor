@@ -33,30 +33,26 @@ namespace AssetEditor.UiCommands
 
         public void Execute()
         {
-            // Step 1: Select the .pack file
-            using var packDialog = new OpenFileDialog
-            {
-                Filter = "Pack files (*.pack)|*.pack|All files (*.*)|*.*",
-                Title = "Select pack file to convert"
-            };
-
-            if (packDialog.ShowDialog() != DialogResult.OK)
+            var packDialog = _standardDialogs.ShowSystemOpenFileDialog(filter: "Pack files (*.pack)|*.pack|All files (*.*)|*.*");
+            if (!packDialog.Result || packDialog.FilePaths.Count == 0)
                 return;
 
-            // Step 2: Select destination folder
             using var folderDialog = new FolderBrowserDialog
             {
-                Description = "Select destination folder for extracted files",
+                Description = "Select where the mod project folder and output pack should be created",
                 UseDescriptionForTitle = true
             };
 
             if (folderDialog.ShowDialog() != DialogResult.OK)
                 return;
 
-            var destinationFolder = folderDialog.SelectedPath;
+            var packFilePath = packDialog.FilePaths[0];
+            var modName = Path.GetFileNameWithoutExtension(packFilePath);
+            var destinationFolder = Path.Combine(folderDialog.SelectedPath, modName);
+            var outputPackPath = Path.Combine(folderDialog.SelectedPath, $"{modName}.pack");
+            Directory.CreateDirectory(destinationFolder);
 
-            // Step 3: Load the pack and extract all files to the destination
-            var packContainer = _packFileContainerLoader.CreateFromPackFile(PackFileContainerType.Normal, packDialog.FileName, false);
+            var packContainer = _packFileContainerLoader.CreateFromPackFile(PackFileContainerType.Normal, packFilePath, false);
             var allFiles = packContainer.GetAllFiles();
 
             foreach (var (relativePath, packFile) in allFiles)
@@ -70,13 +66,12 @@ namespace AssetEditor.UiCommands
                 File.WriteAllBytes(absolutePath, data);
             }
 
-            // Step 4: Open the extracted folder as a SystemFolderContainer
             var systemContainer = _systemFolderContainerFactory.Create(destinationFolder);
             if (systemContainer.PackFileSettings.GameVersion == null)
-            {
                 systemContainer.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
-                systemContainer.SaveSettings();
-            }
+
+            systemContainer.PackFileSettings.SaveLocationPath = outputPackPath;
+            systemContainer.SaveSettings();
             _packFileService.AddContainer(systemContainer);
             _packFileService.SetEditablePack(systemContainer);
 
