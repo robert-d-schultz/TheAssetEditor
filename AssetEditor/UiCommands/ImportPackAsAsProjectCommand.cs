@@ -1,5 +1,5 @@
 ﻿using System.IO;
-using System.Windows.Forms;
+using CommonControls.BaseDialogs;
 using Shared.Core.Events;
 using Shared.Core.PackFiles;
 using Shared.Core.PackFiles.Models;
@@ -37,20 +37,30 @@ namespace AssetEditor.UiCommands
             if (!packDialog.Result || packDialog.FilePaths.Count == 0)
                 return;
 
-            using var folderDialog = new FolderBrowserDialog
-            {
-                Description = "Select where the mod project folder and output pack should be created",
-                UseDescriptionForTitle = true
-            };
-
-            if (folderDialog.ShowDialog() != DialogResult.OK)
+            var window = new NewPackFileWindow();
+            if (window.ShowDialog() != true)
                 return;
 
             var packFilePath = packDialog.FilePaths[0];
-            var modName = Path.GetFileNameWithoutExtension(packFilePath);
-            var destinationFolder = Path.Combine(folderDialog.SelectedPath, modName);
-            var outputPackPath = Path.Combine(folderDialog.SelectedPath, $"{modName}.pack");
-            Directory.CreateDirectory(destinationFolder);
+
+            if (string.IsNullOrWhiteSpace(window.SelectedFolderPath))
+            {
+                _standardDialogs.ShowDialogBox("No folder was selected", "Error");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(window.SelectedOutputFolderPath))
+            {
+                _standardDialogs.ShowDialogBox("No output folder was selected", "Error");
+                return;
+            }
+
+            var projectFolderName = Path.GetFileName(window.SelectedFolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(projectFolderName))
+                projectFolderName = Path.GetFileNameWithoutExtension(packFilePath);
+
+            var destinationFolder = window.SelectedFolderPath;
+            var outputPackPath = Path.Combine(window.SelectedOutputFolderPath, projectFolderName + ".pack");
 
             var packContainer = _packFileContainerLoader.CreateFromPackFile(PackFileContainerType.Normal, packFilePath, false);
             var allFiles = packContainer.GetAllFiles();
