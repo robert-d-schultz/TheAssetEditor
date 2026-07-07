@@ -15,6 +15,13 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
     [TestFixture]
     internal class SystemFolderContainerTests_Integration
     {
+        private static readonly string[] CorruptionDetectionFilePaths =
+        [
+            @"!!!packfile_corruction_detection\packfile_corruction_detection_1.txt",
+            @"packfile_corruction_detection\packfile_corruction_detection_2.txt",
+            @"zzzz_packfile_corruction_detection\packfile_corruction_detection_3.txt"
+        ];
+
         private string _tempDir = null!;
 
         [SetUp]
@@ -34,6 +41,27 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         private static IFileSystemAccess CreateRealFileSystemAccess()
         {
             return new FileSystemAccess();
+        }
+
+        private static Mock<IGlobalEventHub> CreateEventHubWithPackFileSettingsDispatch()
+        {
+            var eventHub = new Mock<IGlobalEventHub>();
+            var settingsChangedHandlers = new List<Action<PackFileSettingsChangedEvent>>();
+
+            eventHub.Setup(x => x.Register(It.IsAny<object>(), It.IsAny<Action<PackFileSettingsChangedEvent>>()))
+                .Callback<object, Action<PackFileSettingsChangedEvent>>((_, action) => settingsChangedHandlers.Add(action));
+
+            eventHub.Setup(x => x.UnRegister(It.IsAny<object>()))
+                .Callback<object>(_ => settingsChangedHandlers.Clear());
+
+            eventHub.Setup(x => x.PublishGlobalEvent(It.IsAny<PackFileSettingsChangedEvent>()))
+                .Callback<PackFileSettingsChangedEvent>(e =>
+                {
+                    foreach (var handler in settingsChangedHandlers.ToList())
+                        handler(e);
+                });
+
+            return eventHub;
         }
 
         private static string GetDataFileFromWorkspace(string fileName)
@@ -63,7 +91,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
         [Test]
         public void ProjectSettings_PersistsOutputPackFilePath()
         {
-            var eventHub = new Mock<IGlobalEventHub>();
+            var eventHub = CreateEventHubWithPackFileSettingsDispatch();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
             var outputFolder = Path.Combine(_tempDir, "output");
@@ -78,10 +106,13 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             Assert.That(File.Exists(projectSettingsPath), Is.True);
             var json = File.ReadAllText(projectSettingsPath);
             Assert.That(json, Does.Contain("OutputPackFilePath"));
+            Assert.That(json, Does.Contain("EnablePackFileCorruptionDetection"));
+            Assert.That(json, Does.Contain("true"));
             Assert.That(json, Does.Contain(outputPath.Replace("\\", "\\\\")));
 
             var reopened = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
             Assert.That(reopened.PackFileSettings.SaveLocationPath, Is.EqualTo(outputPath));
+            Assert.That(reopened.PackFileSettings.EnablePackFileCorruptionDetection, Is.True);
             reopened.Dispose();
         }
 
@@ -112,7 +143,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             karlContainer.IsCaPackFile = true;
             karlContainer.IsReadOnly = true;
 
-            var eventHub = new Mock<IGlobalEventHub>();
+            var eventHub = CreateEventHubWithPackFileSettingsDispatch();
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
 
@@ -182,6 +213,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
                 .ToList();
 
             var packFiles = reloadedPack.GetAllFiles().Keys.ToList();
+            packFiles.RemoveAll(IsCorruptionDetectionFile);
             Assert.That(diskFiles, Is.EquivalentTo(packFiles));
 
             // Close + reopen project; ignore list should persist in project_ignore.json
@@ -263,6 +295,12 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             Assert.That(loadedEditedBytes, Is.EqualTo(editedBytes));
         }
 
+        private static bool IsCorruptionDetectionFile(string relativePath)
+        {
+            var normalizedPath = PathNormalization.NormalizeFileName(relativePath);
+            return CorruptionDetectionFilePaths.Any(x => string.Equals(normalizedPath, PathNormalization.NormalizeFileName(x), StringComparison.OrdinalIgnoreCase));
+        }
+
         [Test]
         public void IgnoreList_PathNormalization_MixedCaseAndSlashDirection_AllIgnoredAtSave()
         {
@@ -271,6 +309,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var fileSystem = CreateRealFileSystemAccess();
             var watcher = new Mock<IFileSystemWatcher>();
             var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            container.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             var pfs = new PackFileService(eventHub.Object);
             pfs.MessageBoxProvider = new Mock<ISimpleMessageBox>().Object;
@@ -404,6 +443,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
 
             // Act: create container from real folder
             var container = new SystemFolderContainer(_tempDir, fileSystem, watcher.Object, eventHub.Object);
+            container.PackFileSettings.EnablePackFileCorruptionDetection = false;
             Assert.That(container.GetFileCount(), Is.EqualTo(1));
             Assert.That(container.FindFile(@"models\unit.txt"), Is.Not.Null);
 
@@ -514,6 +554,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var mockWatcher = new Mock<IFileSystemWatcher>();
 
             var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            container.PackFileSettings.EnablePackFileCorruptionDetection = false;
             var pfs = new PackFileService(eventHub.Object);
             pfs.MessageBoxProvider = new Mock<ISimpleMessageBox>().Object;
             pfs.EnforceGameFilesMustBeLoaded = false;
@@ -616,7 +657,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             using var reader = new BinaryReader(fs);
             var loaded = PackFileSerializerLoader.Load(packPath, fs.Length, reader, new CaPackDuplicateFileResolver());
 
-            Assert.That(loaded.GetFileCount(), Is.EqualTo(2));
+            Assert.That(loaded.GetFileCount(), Is.EqualTo(5));
             Assert.That(loaded.FindFile(@"initial.txt"), Is.Not.Null);
             Assert.That(loaded.FindFile(@"data\added_file.bin"), Is.Not.Null);
 
@@ -650,6 +691,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             }
 
             var sysContainer = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            sysContainer.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             // Create equivalent PackFileContainer
             var packContainer = PackFileContainer.CreatePackFile("test", "test.pack");
@@ -718,6 +760,7 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             var fileSystem = CreateRealFileSystemAccess();
             var mockWatcher = new Mock<IFileSystemWatcher>();
             var container = new SystemFolderContainer(_tempDir, fileSystem, mockWatcher.Object, eventHub.Object);
+            container.PackFileSettings.EnablePackFileCorruptionDetection = false;
 
             // Expected ordering: ordinal, matching PackFileSortHelper.PathComparer / serializer
             var expectedOrder = rootFiles

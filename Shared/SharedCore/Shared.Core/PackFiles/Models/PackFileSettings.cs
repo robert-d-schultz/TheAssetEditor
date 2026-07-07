@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using Shared.Core.Events;
+using Shared.Core.PackFiles.Events;
 using Shared.Core.Settings;
 
 namespace Shared.Core.PackFiles.Models
@@ -8,13 +10,18 @@ namespace Shared.Core.PackFiles.Models
     {
         private string? _saveLocationPath;
         private GameTypeEnum? _gameVersion;
+        private bool _enablePackFileCorruptionDetection;
         private ObservableCollection<string> _ignoredFilesWhenSerializing = new();
-
-        public event Action? SettingsChanged;
+        private IGlobalEventHub? _eventHub;
 
         public PackFileSettings()
         {
             _ignoredFilesWhenSerializing.CollectionChanged += OnIgnoredFilesChanged;
+        }
+
+        public void SetEventHub(IGlobalEventHub? eventHub)
+        {
+            _eventHub = eventHub;
         }
 
         public string? SaveLocationPath
@@ -26,7 +33,7 @@ namespace Shared.Core.PackFiles.Models
                     return;
 
                 _saveLocationPath = value;
-                SettingsChanged?.Invoke();
+                PublishSettingsChanged();
             }
         }
 
@@ -39,7 +46,20 @@ namespace Shared.Core.PackFiles.Models
                     return;
 
                 _gameVersion = value;
-                SettingsChanged?.Invoke();
+                PublishSettingsChanged();
+            }
+        }
+
+        public bool EnablePackFileCorruptionDetection
+        {
+            get => _enablePackFileCorruptionDetection;
+            set
+            {
+                if (_enablePackFileCorruptionDetection == value)
+                    return;
+
+                _enablePackFileCorruptionDetection = value;
+                PublishSettingsChanged();
             }
         }
 
@@ -54,13 +74,18 @@ namespace Shared.Core.PackFiles.Models
                 _ignoredFilesWhenSerializing.CollectionChanged -= OnIgnoredFilesChanged;
                 _ignoredFilesWhenSerializing = value ?? new ObservableCollection<string>();
                 _ignoredFilesWhenSerializing.CollectionChanged += OnIgnoredFilesChanged;
-                SettingsChanged?.Invoke();
+                PublishSettingsChanged();
             }
         }
 
         private void OnIgnoredFilesChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
-            SettingsChanged?.Invoke();
+            PublishSettingsChanged();
+        }
+
+        private void PublishSettingsChanged()
+        {
+            _eventHub?.PublishGlobalEvent(new PackFileSettingsChangedEvent(this));
         }
     }
 }

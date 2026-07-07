@@ -14,6 +14,13 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
     [TestFixture]
     internal class SystemFolderContainerTests_SaveToDisk
     {
+        private static readonly (string Path, string Content)[] CorruptionDetectionFiles =
+        [
+            (@"!!!packfile_corruction_detection\packfile_corruction_detection_1.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 1"),
+            (@"packfile_corruction_detection\packfile_corruction_detection_2.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 2"),
+            (@"zzzz_packfile_corruction_detection\packfile_corruction_detection_3.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 3")
+        ];
+
         private string _tempDir = null!;
         private string _outputDir = null!;
         private SystemFolderContainer _container = null!;
@@ -75,9 +82,48 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
             using var reader = new BinaryReader(fileStream);
             var loaded = PackFileSerializerLoader.Load(outputPath, fileStream.Length, reader, new CaPackDuplicateFileResolver());
 
-            Assert.That(loaded.GetFileCount(), Is.EqualTo(2));
+            Assert.That(loaded.GetFileCount(), Is.EqualTo(5));
             Assert.That(loaded.FindFile(@"folder\filea.txt"), Is.Not.Null);
             Assert.That(loaded.FindFile(@"fileb.bin"), Is.Not.Null);
+            AssertCorruptionDetectionFiles(loaded);
+        }
+
+        [Test]
+        public void SaveToDisk_CorruptionDetectionDisabled_DoesNotAddDetectionFiles()
+        {
+            var outputPath = Path.Combine(_outputDir, "output.pack");
+            _container.PackFileSettings.EnablePackFileCorruptionDetection = false;
+
+            _container.SaveToDisk(outputPath, false, _gameInfo);
+
+            using var fileStream = File.OpenRead(outputPath);
+            using var reader = new BinaryReader(fileStream);
+            var loaded = PackFileSerializerLoader.Load(outputPath, fileStream.Length, reader, new CaPackDuplicateFileResolver());
+
+            Assert.That(loaded.GetFileCount(), Is.EqualTo(2));
+            foreach (var detectionFile in CorruptionDetectionFiles)
+                Assert.That(loaded.FindFile(detectionFile.Path), Is.Null);
+        }
+
+        [Test]
+        public void SaveToDisk_ExistingCorruptionDetectionFiles_AreReplacedBeforeSaving()
+        {
+            var outputPath = Path.Combine(_outputDir, "output.pack");
+            foreach (var detectionFile in CorruptionDetectionFiles)
+            {
+                var absolutePath = Path.Combine(_tempDir, detectionFile.Path);
+                Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
+                File.WriteAllText(absolutePath, "bad existing content");
+                _container.AddOrUpdateFile(detectionFile.Path, PackFile.CreateFromASCII(Path.GetFileName(detectionFile.Path), "bad existing content"));
+            }
+
+            _container.SaveToDisk(outputPath, false, _gameInfo);
+
+            using var fileStream = File.OpenRead(outputPath);
+            using var reader = new BinaryReader(fileStream);
+            var loaded = PackFileSerializerLoader.Load(outputPath, fileStream.Length, reader, new CaPackDuplicateFileResolver());
+
+            AssertCorruptionDetectionFiles(loaded);
         }
 
         [Test]
@@ -215,6 +261,17 @@ namespace Shared.CoreTest.PackFiles.Models.Containers
 
             Assert.That(loaded.Header, Is.Not.Null);
             Assert.That(loaded.Header!.Version, Is.EqualTo(PackFileVersion.PFH5));
+        }
+
+        private static void AssertCorruptionDetectionFiles(PackFileContainer loaded)
+        {
+            foreach (var detectionFile in CorruptionDetectionFiles)
+            {
+                var packFile = loaded.FindFile(detectionFile.Path);
+                Assert.That(packFile, Is.Not.Null, $"Expected corruption detection file '{detectionFile.Path}'");
+                var content = System.Text.Encoding.UTF8.GetString(packFile!.DataSource.ReadData());
+                Assert.That(content, Is.EqualTo(detectionFile.Content));
+            }
         }
     }
 }

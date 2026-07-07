@@ -17,6 +17,12 @@ namespace Shared.Core.PackFiles.Models.Containers
     {
         private static readonly ILogger _logger = Logging.Create<SystemFolderContainer>();
         private const string ProjectSettingsFileName = "project_ignore.json";
+        private static readonly IReadOnlyList<(string Path, string Content)> PackFileCorruptionDetectionFiles =
+        [
+            (@"!!!packfile_corruction_detection\packfile_corruction_detection_1.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 1"),
+            (@"packfile_corruction_detection\packfile_corruction_detection_2.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 2"),
+            (@"zzzz_packfile_corruction_detection\packfile_corruction_detection_3.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 3")
+        ];
         private static readonly JsonSerializerOptions ProjectSettingsJsonOptions = new()
         {
             WriteIndented = true,
@@ -54,10 +60,12 @@ namespace Shared.Core.PackFiles.Models.Containers
             _syncContext = syncContext ?? SynchronizationContext.Current;
             SystemFilePath = folderPath;
             PackFileSettings.SaveLocationPath = GetDefaultOutputPackPath(folderPath);
+            PackFileSettings.EnablePackFileCorruptionDetection = true;
 
             LoadProjectSettingsFromDisk();
             EnsureProjectSettingsFileIsIgnored();
-            PackFileSettings.SettingsChanged += OnPackFileSettingsChanged;
+            PackFileSettings.SetEventHub(eventHub);
+            eventHub?.Register<PackFileSettingsChangedEvent>(this, OnPackFileSettingsChanged);
 
             Name = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
@@ -116,6 +124,7 @@ namespace Shared.Core.PackFiles.Models.Containers
                 if (!string.IsNullOrWhiteSpace(settings.OutputPackFilePath))
                     PackFileSettings.SaveLocationPath = settings.OutputPackFilePath;
 
+                PackFileSettings.EnablePackFileCorruptionDetection = settings.EnablePackFileCorruptionDetection;
                 PackFileSettings.GameVersion = settings.GameVersion;
 
                 var normalizedIgnoredFiles = (settings.IgnoredFilesWhenSerializing ?? [])
@@ -153,6 +162,7 @@ namespace Shared.Core.PackFiles.Models.Containers
                 var settings = new SystemFolderProjectSettings
                 {
                     OutputPackFilePath = PackFileSettings.SaveLocationPath,
+                    EnablePackFileCorruptionDetection = PackFileSettings.EnablePackFileCorruptionDetection,
                     GameVersion = PackFileSettings.GameVersion,
                     IgnoredFilesWhenSerializing = ignoredFiles
                 };
@@ -166,8 +176,11 @@ namespace Shared.Core.PackFiles.Models.Containers
             }
         }
 
-        private void OnPackFileSettingsChanged()
+        private void OnPackFileSettingsChanged(PackFileSettingsChangedEvent settingsChangedEvent)
         {
+            if (!ReferenceEquals(settingsChangedEvent.Settings, PackFileSettings))
+                return;
+
             if (_disposed || _isApplyingProjectSettings)
                 return;
 
@@ -501,10 +514,16 @@ namespace Shared.Core.PackFiles.Models.Containers
 
             foreach (var (relativePath, packFile) in _fileList)
             {
+                if (PackFileSettings.EnablePackFileCorruptionDetection && IsCorruptionDetectionFile(relativePath))
+                    continue;
+
                 var data = packFile.DataSource.ReadData();
                 var memFile = new PackFile(packFile.Name, new MemorySource(data));
                 transientContainer.AddOrUpdateFile(relativePath, memFile);
             }
+
+            if (PackFileSettings.EnablePackFileCorruptionDetection)
+                AddCorruptionDetectionFiles(transientContainer);
 
             using (SuppressWatcher())
             {
@@ -514,7 +533,46 @@ namespace Shared.Core.PackFiles.Models.Containers
                     PackFileSerializerWriter.SaveToByteArray(path, transientContainer, writer, effectiveGameInformation);
                 }
 
-                _fileSystemAccess.FileMove(tempPath, path);
+                if (PackFileSettings.EnablePackFileCorruptionDetection)
+                    ValidateCorruptionDetectionFiles(tempPath);
+
+                File.Copy(tempPath, path, true);
+                _fileSystemAccess.FileDelete(tempPath);
+            }
+        }
+
+        private static bool IsCorruptionDetectionFile(string relativePath)
+        {
+            var normalizedPath = PathNormalization.NormalizeFileName(relativePath);
+            var fileName = Path.GetFileName(normalizedPath);
+            return PackFileCorruptionDetectionFiles.Any(x =>
+                string.Equals(normalizedPath, PathNormalization.NormalizeFileName(x.Path), StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(fileName, Path.GetFileName(x.Path), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static void AddCorruptionDetectionFiles(PackFileContainer transientContainer)
+        {
+            foreach (var detectionFile in PackFileCorruptionDetectionFiles)
+            {
+                var bytes = Encoding.UTF8.GetBytes(detectionFile.Content);
+                transientContainer.AddOrUpdateFile(detectionFile.Path, new PackFile(Path.GetFileName(detectionFile.Path), new MemorySource(bytes)));
+            }
+        }
+
+        private static void ValidateCorruptionDetectionFiles(string tempPath)
+        {
+            using var fileStream = File.OpenRead(tempPath);
+            using var reader = new BinaryReader(fileStream);
+            var loadedPack = PackFileSerializerLoader.Load(tempPath, fileStream.Length, reader, new CustomPackDuplicateFileResolver());
+
+            foreach (var detectionFile in PackFileCorruptionDetectionFiles)
+            {
+                var packFile = loadedPack.FindFile(detectionFile.Path)
+                    ?? throw new InvalidDataException($"Packfile corruption detection failed. Missing validation file '{detectionFile.Path}'.");
+
+                var actualContent = Encoding.UTF8.GetString(packFile.DataSource.ReadData());
+                if (!string.Equals(actualContent, detectionFile.Content, StringComparison.Ordinal))
+                    throw new InvalidDataException($"Packfile corruption detection failed. Validation file '{detectionFile.Path}' had unexpected content.");
             }
         }
 
@@ -742,7 +800,7 @@ namespace Shared.Core.PackFiles.Models.Containers
                 _watcher.EnableRaisingEvents = false;
                 _watcher.Dispose();
             }
-            PackFileSettings.SettingsChanged -= OnPackFileSettingsChanged;
+            _eventHub?.UnRegister(this);
             _debounceTimer?.Dispose();
             _debounceTimer = null;
             _fileList.Clear();
@@ -751,6 +809,7 @@ namespace Shared.Core.PackFiles.Models.Containers
         private class SystemFolderProjectSettings
         {
             public string? OutputPackFilePath { get; set; }
+            public bool EnablePackFileCorruptionDetection { get; set; } = true;
             public GameTypeEnum? GameVersion { get; set; }
             public List<string>? IgnoredFilesWhenSerializing { get; set; }
         }

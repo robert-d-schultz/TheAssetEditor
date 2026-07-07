@@ -5,6 +5,7 @@ namespace Shared.Core.PackFiles.Events
     public record PackFileSavedEvent(PackFile File);
     public record PackFileContainerSavedEvent(IPackFileContainer Container);
     public record PackFileLookUpEvent(string FileName, IPackFileContainer? Container, bool Found);
+    public record PackFileSettingsChangedEvent(PackFileSettings Settings);
 
     public abstract record PackFileContainerManipulationEvent();
     public record PackFileContainerAddedEvent(IPackFileContainer Container) : PackFileContainerManipulationEvent;
