@@ -10,6 +10,13 @@ namespace Shared.CoreTest.PackFiles.Serialization
     [TestFixture]
     internal class PackFileSerializerWriterTests
     {
+        private static readonly (string Path, string Content)[] CorruptionDetectionFiles =
+        [
+            (@"!!!packfile_corruction_detection\packfile_corruction_detection_1.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 1"),
+            (@"packfile_corruction_detection\packfile_corruction_detection_2.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 2"),
+            (@"zzzz_packfile_corruction_detection\packfile_corruction_detection_3.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 3")
+        ];
+
         [Test]
         public void SaveToByteArray_IgnoresFilesConfiguredInContainerSettings()
         {
@@ -33,6 +40,47 @@ namespace Shared.CoreTest.PackFiles.Serialization
             Assert.That(loadedPack.FindFile("folder\\keep.txt"), Is.Not.Null);
             Assert.That(loadedPack.FindFile("folder\\ignore.txt"), Is.Null);
             Assert.That(container.FindFile("folder\\ignore.txt"), Is.Not.Null);
+        }
+
+        [Test]
+        public void SaveToByteArray_CorruptionDetectionEnabled_AddsDetectionFiles()
+        {
+            var gameInfo = GameInformationDatabase.GetGameById(GameTypeEnum.Warhammer3);
+            var outputContainerName = @"c:\fullpath\to\corruption-detection-test.pack";
+            var container = PackFileContainer.CreatePackFile("test", "test.pack", PackFileVersion.PFH5);
+            container.PackFileSettings.EnablePackFileCorruptionDetection = true;
+            container.AddOrUpdateFile("folder\\keep.txt", PackFile.CreateFromASCII("keep.txt", "KEEP"));
+
+            Assert.That(container.PackFileSettings.EnablePackFileCorruptionDetection, Is.True);
+
+            using var writeMs = new MemoryStream();
+            using var writer = new BinaryWriter(writeMs);
+            PackFileSerializerWriter.SaveToByteArray(outputContainerName, container, writer, gameInfo);
+
+            var loadedPack = LoadFromMemory(outputContainerName, writeMs.ToArray());
+
+            Assert.That(loadedPack.FindFile("folder\\keep.txt"), Is.Not.Null);
+            AssertCorruptionDetectionFiles(loadedPack, writeMs);
+        }
+
+        [Test]
+        public void SaveToByteArray_CorruptionDetectionEnabled_ReplacesExistingDetectionFiles()
+        {
+            var gameInfo = GameInformationDatabase.GetGameById(GameTypeEnum.Warhammer3);
+            var outputContainerName = @"c:\fullpath\to\corruption-detection-replace-test.pack";
+            var container = PackFileContainer.CreatePackFile("test", "test.pack", PackFileVersion.PFH5);
+            container.PackFileSettings.EnablePackFileCorruptionDetection = true;
+            container.AddOrUpdateFile(CorruptionDetectionFiles[0].Path, PackFile.CreateFromASCII(Path.GetFileName(CorruptionDetectionFiles[0].Path), "stale"));
+
+            Assert.That(container.PackFileSettings.EnablePackFileCorruptionDetection, Is.True);
+
+            using var writeMs = new MemoryStream();
+            using var writer = new BinaryWriter(writeMs);
+            PackFileSerializerWriter.SaveToByteArray(outputContainerName, container, writer, gameInfo);
+
+            var loadedPack = LoadFromMemory(outputContainerName, writeMs.ToArray());
+
+            AssertCorruptionDetectionFiles(loadedPack, writeMs);
         }
 
         [TestCase(GameTypeEnum.Warhammer3, PackFileVersion.PFH4, "folder//filex.txt", CompressionFormat.Zstd, CompressionFormat.None, true)]
@@ -139,6 +187,26 @@ namespace Shared.CoreTest.PackFiles.Serialization
                 }
             }
 
+        }
+
+        private static PackFileContainer LoadFromMemory(string outputContainerName, byte[] data)
+        {
+            using var readMs = new MemoryStream(data);
+            using var reader = new BinaryReader(readMs);
+            return PackFileSerializerLoader.Load(outputContainerName, data.LongLength, reader, new CaPackDuplicateFileResolver());
+        }
+
+        private static void AssertCorruptionDetectionFiles(PackFileContainer loadedPack, Stream? sourceStream = null)
+        {
+            foreach (var detectionFile in CorruptionDetectionFiles)
+            {
+                var packFile = loadedPack.FindFile(detectionFile.Path);
+                Assert.That(packFile, Is.Not.Null, $"Expected corruption detection file '{detectionFile.Path}'. Loaded files: {string.Join(", ", loadedPack.GetAllFiles().Keys)}");
+                var data = sourceStream != null && packFile!.DataSource is PackedFileSource packedFileSource
+                    ? packedFileSource.ReadData(sourceStream)
+                    : packFile!.DataSource.ReadData();
+                Assert.That(System.Text.Encoding.UTF8.GetString(data), Is.EqualTo(detectionFile.Content));
+            }
         }
     }
 }

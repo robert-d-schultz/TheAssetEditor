@@ -1,5 +1,4 @@
 ﻿using System.Collections.ObjectModel;
-using System.Text;
 using Shared.Core.Misc;
 using Shared.Core.PackFiles.Models.FileSources;
 using Shared.Core.PackFiles.Serialization;
@@ -14,12 +13,6 @@ namespace Shared.Core.PackFiles.Models.Containers
         private static readonly ILogger _logger = Logging.Create<SystemFolderContainer>();
         private const string ProjectSettingsFileName = "aeproject.json";
         private const string LegacyProjectSettingsFileName = "project_ignore.json";
-        private static readonly IReadOnlyList<(string Path, string Content)> PackFileCorruptionDetectionFiles =
-        [
-            (@"!!!packfile_corruction_detection\packfile_corruction_detection_1.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 1"),
-            (@"packfile_corruction_detection\packfile_corruction_detection_2.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 2"),
-            (@"zzzz_packfile_corruction_detection\packfile_corruction_detection_3.txt", "This file is here to validate that the packfile has not been corrupted while saving. This is check 3")
-        ];
 
         private readonly IFileSystemAccess _fileSystemAccess;
         private readonly IFileSystemWatcher? _watcher;
@@ -462,19 +455,14 @@ namespace Shared.Core.PackFiles.Models.Containers
             var transientContainer = PackFileContainer.CreatePackFile(Name, path, effectiveGameInformation.PackFileVersion);
             transientContainer.PackFileSettings.GameVersion = PackFileSettings.GameVersion;
             transientContainer.PackFileSettings.IgnoredFilesWhenSerializing = new ObservableCollection<string>(PackFileSettings.IgnoredFilesWhenSerializing);
+            transientContainer.PackFileSettings.EnablePackFileCorruptionDetection = PackFileSettings.EnablePackFileCorruptionDetection;
 
             foreach (var (relativePath, packFile) in _fileList)
             {
-                if (PackFileSettings.EnablePackFileCorruptionDetection && IsCorruptionDetectionFile(relativePath))
-                    continue;
-
                 var data = packFile.DataSource.ReadData();
                 var memFile = new PackFile(packFile.Name, new MemorySource(data));
                 transientContainer.AddOrUpdateFile(relativePath, memFile);
             }
-
-            if (PackFileSettings.EnablePackFileCorruptionDetection)
-                AddCorruptionDetectionFiles(transientContainer);
 
             using (SuppressWatcher())
             {
@@ -484,46 +472,8 @@ namespace Shared.Core.PackFiles.Models.Containers
                     PackFileSerializerWriter.SaveToByteArray(path, transientContainer, writer, effectiveGameInformation);
                 }
 
-                if (PackFileSettings.EnablePackFileCorruptionDetection)
-                    ValidateCorruptionDetectionFiles(tempPath);
-
                 File.Copy(tempPath, path, true);
                 _fileSystemAccess.FileDelete(tempPath);
-            }
-        }
-
-        private static bool IsCorruptionDetectionFile(string relativePath)
-        {
-            var normalizedPath = PathNormalization.NormalizeFileName(relativePath);
-            var fileName = Path.GetFileName(normalizedPath);
-            return PackFileCorruptionDetectionFiles.Any(x =>
-                string.Equals(normalizedPath, PathNormalization.NormalizeFileName(x.Path), StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(fileName, Path.GetFileName(x.Path), StringComparison.OrdinalIgnoreCase));
-        }
-
-        private static void AddCorruptionDetectionFiles(PackFileContainer transientContainer)
-        {
-            foreach (var detectionFile in PackFileCorruptionDetectionFiles)
-            {
-                var bytes = Encoding.UTF8.GetBytes(detectionFile.Content);
-                transientContainer.AddOrUpdateFile(detectionFile.Path, new PackFile(Path.GetFileName(detectionFile.Path), new MemorySource(bytes)));
-            }
-        }
-
-        private static void ValidateCorruptionDetectionFiles(string tempPath)
-        {
-            using var fileStream = File.OpenRead(tempPath);
-            using var reader = new BinaryReader(fileStream);
-            var loadedPack = PackFileSerializerLoader.Load(tempPath, fileStream.Length, reader, new CustomPackDuplicateFileResolver());
-
-            foreach (var detectionFile in PackFileCorruptionDetectionFiles)
-            {
-                var packFile = loadedPack.FindFile(detectionFile.Path)
-                    ?? throw new InvalidDataException($"Packfile corruption detection failed. Missing validation file '{detectionFile.Path}'.");
-
-                var actualContent = Encoding.UTF8.GetString(packFile.DataSource.ReadData());
-                if (!string.Equals(actualContent, detectionFile.Content, StringComparison.Ordinal))
-                    throw new InvalidDataException($"Packfile corruption detection failed. Validation file '{detectionFile.Path}' had unexpected content.");
             }
         }
 
