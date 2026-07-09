@@ -53,6 +53,7 @@ namespace AssetEditor.UiCommands
 
             var folderPack = _systemFolderContainerFactory.Create(window.SelectedFolderPath);
             folderPack.PackFileSettings.SaveLocationPath = outputPath;
+            folderPack.PackFileSettings.EnablePackFileCorruptionDetection = window.EnablePackFileCorruptionDetection;
             if (folderPack.PackFileSettings.GameVersion == null)
                 folderPack.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
             folderPack.SaveSettings();

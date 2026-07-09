@@ -8,6 +8,7 @@ namespace CommonControls.BaseDialogs
         public string PackName => string.IsNullOrWhiteSpace(SelectedFolderPath) ? string.Empty : System.IO.Path.GetFileName(SelectedFolderPath.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
         public string? SelectedFolderPath { get; private set; }
         public string? SelectedOutputFolderPath { get; private set; }
+        public bool EnablePackFileCorruptionDetection => EnablePackFileCorruptionDetectionCheckBox.IsChecked == true;
 
         public NewPackFileWindow()
         {

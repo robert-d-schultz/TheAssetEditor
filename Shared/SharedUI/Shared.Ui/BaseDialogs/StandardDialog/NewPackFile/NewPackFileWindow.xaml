@@ -6,12 +6,13 @@
         mc:Ignorable="d"
         Title="New Pack" 
         Width="680"
-        Height="240"
+        Height="270"
         ResizeMode="NoResize"
         Style="{StaticResource CustomWindowStyle}"
         WindowStartupLocation="CenterOwner">
     <Grid Margin="10">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -34,7 +35,10 @@
         <TextBox Grid.Row="2" Grid.Column="1" x:Name="OutputFolderTextBox" IsReadOnly="True" VerticalAlignment="Center" Height="24" Margin="0,0,8,8"/>
         <Button Grid.Row="2" Grid.Column="2" x:Name="BrowseOutputFolderButton" Content="Browse..." VerticalAlignment="Center" Height="24" Margin="0,0,0,8" Click="BrowseOutputFolder_Click"/>
 
-        <StackPanel Grid.Row="4" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Right">
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="Corruption detection" VerticalAlignment="Center" Margin="0,0,8,8"/>
+        <CheckBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" x:Name="EnablePackFileCorruptionDetectionCheckBox" Content="Add corruption detection files when saving" IsChecked="False" VerticalAlignment="Center" Margin="0,0,0,8"/>
+
+        <StackPanel Grid.Row="5" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Width="80" Content="OK" Margin="0,0,8,0" Click="Ok_Click"/>
             <Button Width="80" Content="Cancel" Click="Cancel_Click"/>
         </StackPanel>

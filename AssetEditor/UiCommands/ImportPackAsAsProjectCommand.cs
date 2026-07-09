@@ -81,6 +81,7 @@ namespace AssetEditor.UiCommands
                 systemContainer.PackFileSettings.GameVersion = _applicationSettingsService.CurrentSettings.CurrentGame;
 
             systemContainer.PackFileSettings.SaveLocationPath = outputPackPath;
+            systemContainer.PackFileSettings.EnablePackFileCorruptionDetection = window.EnablePackFileCorruptionDetection;
             systemContainer.SaveSettings();
             _packFileService.AddContainer(systemContainer);
             _packFileService.SetEditablePack(systemContainer);
