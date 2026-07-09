@@ -3,8 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="clr-namespace:Shared.Ui.Common"
         mc:Ignorable="d"
-        Title="New Pack" 
+        Title="{loc:Loc NewPackFileWindow.Title}" 
         Width="680"
         Height="270"
         ResizeMode="NoResize"
@@ -25,22 +26,22 @@
             <ColumnDefinition Width="120"/>
         </Grid.ColumnDefinitions>
 
-        <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="A packfile project is a folder on disk. Select the project folder and output folder:" Margin="0,0,0,12" FontWeight="SemiBold"/>
+        <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="{loc:Loc NewPackFileWindow.Description}" Margin="0,0,0,12" FontWeight="SemiBold"/>
 
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Project folder" VerticalAlignment="Center" Margin="0,0,8,8"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="{loc:Loc NewPackFileWindow.ProjectFolder}" VerticalAlignment="Center" Margin="0,0,8,8"/>
         <TextBox Grid.Row="1" Grid.Column="1" x:Name="ProjectFolderTextBox" IsReadOnly="True" VerticalAlignment="Center" Height="24" Margin="0,0,8,8"/>
-        <Button Grid.Row="1" Grid.Column="2" x:Name="BrowseProjectFolderButton" Content="Browse..." VerticalAlignment="Center" Height="24" Margin="0,0,0,8" Click="BrowseProjectFolder_Click"/>
+        <Button Grid.Row="1" Grid.Column="2" x:Name="BrowseProjectFolderButton" Content="{loc:Loc NewPackFileWindow.Browse}" VerticalAlignment="Center" Height="24" Margin="0,0,0,8" Click="BrowseProjectFolder_Click"/>
 
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Generated packfile folder" VerticalAlignment="Center" Margin="0,0,8,8"/>
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="{loc:Loc NewPackFileWindow.OutputFolder}" VerticalAlignment="Center" Margin="0,0,8,8"/>
         <TextBox Grid.Row="2" Grid.Column="1" x:Name="OutputFolderTextBox" IsReadOnly="True" VerticalAlignment="Center" Height="24" Margin="0,0,8,8"/>
-        <Button Grid.Row="2" Grid.Column="2" x:Name="BrowseOutputFolderButton" Content="Browse..." VerticalAlignment="Center" Height="24" Margin="0,0,0,8" Click="BrowseOutputFolder_Click"/>
+        <Button Grid.Row="2" Grid.Column="2" x:Name="BrowseOutputFolderButton" Content="{loc:Loc NewPackFileWindow.Browse}" VerticalAlignment="Center" Height="24" Margin="0,0,0,8" Click="BrowseOutputFolder_Click"/>
 
-        <TextBlock Grid.Row="3" Grid.Column="0" Text="Corruption detection" VerticalAlignment="Center" Margin="0,0,8,8"/>
-        <CheckBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" x:Name="EnablePackFileCorruptionDetectionCheckBox" Content="Add corruption detection files when saving" IsChecked="False" VerticalAlignment="Center" Margin="0,0,0,8"/>
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="{loc:Loc NewPackFileWindow.CorruptionDetection}" VerticalAlignment="Center" Margin="0,0,8,8"/>
+        <CheckBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" x:Name="EnablePackFileCorruptionDetectionCheckBox" Content="{loc:Loc NewPackFileWindow.CorruptionDetectionCheckbox}" IsChecked="False" VerticalAlignment="Center" Margin="0,0,0,8"/>
 
         <StackPanel Grid.Row="5" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Width="80" Content="OK" Margin="0,0,8,0" Click="Ok_Click"/>
-            <Button Width="80" Content="Cancel" Click="Cancel_Click"/>
+            <Button Width="80" Content="{loc:Loc NewPackFileWindow.Ok}" Margin="0,0,8,0" Click="Ok_Click"/>
+            <Button Width="80" Content="{loc:Loc NewPackFileWindow.Cancel}" Click="Cancel_Click"/>
         </StackPanel>
     </Grid>
 </Window>
