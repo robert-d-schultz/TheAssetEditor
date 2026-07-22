@@ -138,19 +138,23 @@ namespace GameWorld.Core.WpfWindow.Input
                 {
                     if (_focusElement.IsMouseCaptured)
                     {
-                        _mouseState = new MouseState(_mouseState.X, _mouseState.Y, _mouseState.ScrollWheelValue,
-                            (ButtonState)e.LeftButton, (ButtonState)e.MiddleButton, (ButtonState)e.RightButton, (ButtonState)e.XButton1,
-                            (ButtonState)e.XButton2);
-                        // only release if LeftMouse is up
+                        // Once capture is held (left-button drags only - see CaptureMouse() below),
+                        // a single missed hit-test here must not freeze position tracking for the
+                        // rest of the drag: fast mouse movement routinely lands this per-move
+                        // hit-test outside _focusElement even though the drag is still legitimately
+                        // in progress (capture already guarantees events keep routing here
+                        // regardless of position). Only release capture on button-up; otherwise fall
+                        // through to the normal position/button update below instead of returning.
                         if (e.LeftButton == MouseButtonState.Released)
                         {
                             _focusElement.ReleaseMouseCapture();
                         }
-                        e.Handled = true;
                     }
-
-                    // mouse is outside the control and not captured, so don't update the mouse state
-                    return;
+                    else
+                    {
+                        // mouse is outside the control and not captured, so don't update the mouse state
+                        return;
+                    }
                 }
             }
 
