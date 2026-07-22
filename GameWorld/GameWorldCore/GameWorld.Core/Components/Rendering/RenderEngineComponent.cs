@@ -47,6 +47,28 @@ namespace GameWorld.Core.Components.Rendering
         public SpriteBatch CommonSpriteBatch { get; private set; }
         public SpriteFont DefaultFont { get; private set; }
 
+        /// <summary>When true, skips the editing-grid render bucket (see Render3DObjects) - for
+        /// consumers that want the normal-editing grid hidden, e.g. a "look through a scene camera"
+        /// preview where nothing but the in-game content should show.</summary>
+        public bool HideGrid { get; set; }
+
+        /// <summary>When set, renders at this fixed square pixel size instead of the live (and
+        /// generally non-square) panel/viewport size - for consumers that need an undistorted
+        /// square render independent of how the host panel is resized/oriented (e.g. a square
+        /// "look through a scene camera" preview), since a square *projection* rendered into a
+        /// non-square *target* stretches non-uniformly. The final blit still targets the real
+        /// backbuffer at (0,0,size,size) - whatever's outside that square is left at the plain
+        /// background colour, so consumers relying on this should cover the rest of their panel
+        /// themselves (e.g. an opaque overlay) rather than showing it.</summary>
+        public int? SquareRenderSize { get; set; }
+
+        /// <summary>The last frame's fully-composited render, before it's flattened onto the opaque
+        /// viewport surface (see Draw) - unlike that final surface, this still has real per-pixel
+        /// alpha (SurfaceFormat.Color), so consumers needing transparency (e.g. a CPU-readback
+        /// preview) should read from here instead. Valid until the next Draw call; null before the
+        /// first frame.</summary>
+        public RenderTarget2D? LastFrame => _screenRenderTarget;
+
         public RenderEngineComponent(IWpfGame wpfGame, ResourceLibrary resourceLibrary, ArcBallCamera camera, IDeviceResolver deviceResolverComponent, ApplicationSettingsService applicationSettingsService, SceneRenderParametersStore sceneLightParametersStore, IEventHub eventHub, IGraphicsResourceCreator graphicsResourceCreator, IScopedLogger scopedLogger)
         {
             _logger = scopedLogger.ForContext<RenderEngineComponent>();
@@ -138,8 +160,8 @@ namespace GameWorld.Core.Components.Rendering
         {
             var device = _deviceResolverComponent.Device;
             var spriteBatch = CommonSpriteBatch;
-            var screenWidth = device.Viewport.Width;
-            var screenHeight = device.Viewport.Height;
+            var screenWidth = SquareRenderSize ?? device.Viewport.Width;
+            var screenHeight = SquareRenderSize ?? device.Viewport.Height;
             var drawLines = _saveRenderImageSettings == null ? true: _saveRenderImageSettings.DrawLines;
             var imageUpScale = _saveRenderImageSettings == null ? 1 : _saveRenderImageSettings.ImageUpScaleFactor;
 
@@ -153,9 +175,9 @@ namespace GameWorld.Core.Components.Rendering
             var commonShaderParameters = CommonShaderParameterBuilder.Build(_camera, _sceneLightParameters, screenWidth, screenHeight);
             var backgroundColour = ApplicationSettingsHelper.GetEnumAsColour(_applicationSettingsService.CurrentSettings.RenderEngineBackgroundColour);
 
-            _normalRenderTarget = RenderTargetHelper.GetRenderTarget(device, _normalRenderTarget, imageUpScale, _graphicsResourceCreator);
-            _emissiveRenderTarget = RenderTargetHelper.GetRenderTarget(device, _emissiveRenderTarget, imageUpScale, _graphicsResourceCreator);
-            _screenRenderTarget = RenderTargetHelper.GetRenderTarget(device, _screenRenderTarget, imageUpScale, _graphicsResourceCreator);
+            _normalRenderTarget = RenderTargetHelper.GetRenderTarget(device, _normalRenderTarget, imageUpScale, _graphicsResourceCreator, screenWidth, screenHeight);
+            _emissiveRenderTarget = RenderTargetHelper.GetRenderTarget(device, _emissiveRenderTarget, imageUpScale, _graphicsResourceCreator, screenWidth, screenHeight);
+            _screenRenderTarget = RenderTargetHelper.GetRenderTarget(device, _screenRenderTarget, imageUpScale, _graphicsResourceCreator, screenWidth, screenHeight);
 
             // Configure render targets
             var backBufferRenderTarget = device.GetRenderTargets()[0].RenderTarget as RenderTarget2D;
@@ -267,7 +289,7 @@ namespace GameWorld.Core.Components.Rendering
             foreach (var item in _renderItems[RenderBuckedId.Normal])
                 item.Draw(device, commonShaderParameters, renderingTechnique);
 
-            if (drawLines)
+            if (drawLines && !HideGrid)
             {
                 foreach (var item in _renderItems[RenderBuckedId.Grid])
                     item.Draw(device, commonShaderParameters, renderingTechnique);
