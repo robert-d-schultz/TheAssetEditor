@@ -1,5 +1,6 @@
 ﻿using NUnit.Framework;
-using Shared.Core.ByteParsing;
+using Shared.ByteParsing;
+using Shared.ByteParsing.Parsers;
 
 namespace FileTypesTests.ByteParsing
 {
@@ -138,8 +139,8 @@ namespace FileTypesTests.ByteParsing
 
             CompareBytes(bytesFromValue, encodedFromString);
 
-            Assert.NotNull(stringValue);
-            Assert.AreEqual(stringValue, stringValue2);
+            Assert.That(stringValue, Is.Not.Null);
+            Assert.That(stringValue2, Is.EqualTo(stringValue));
         }
 
         public void Compare(StringParser parser, string value)
@@ -152,15 +153,15 @@ namespace FileTypesTests.ByteParsing
 
             CompareBytes(bytesFromValue, encodedFromString);
 
-            Assert.NotNull(stringValue);
-            Assert.AreEqual(stringValue, stringValue2);
+            Assert.That(stringValue, Is.Not.Null);
+            Assert.That(stringValue2, Is.EqualTo(stringValue));
         }
 
         void CompareBytes(byte[] expected, byte[] actual)
         {
-            Assert.AreEqual(expected.Length, actual.Length);
+            Assert.That(actual.Length, Is.EqualTo(expected.Length));
             for (int i = 0; i < expected.Length; i++)
-                Assert.AreEqual(expected[i], actual[i]);
+                Assert.That(actual[i], Is.EqualTo(expected[i]));
         }
     }
 }

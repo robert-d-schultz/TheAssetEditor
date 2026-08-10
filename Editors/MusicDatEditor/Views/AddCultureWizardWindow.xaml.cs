@@ -1,0 +1,49 @@
+using System.Windows;
+using Editors.MusicDatEditor.ViewModels;
+using Shared.GameFormats.MusicDat;
+
+namespace Editors.MusicDatEditor.Views
+{
+    public partial class AddCultureWizardWindow : Window
+    {
+        public AddCultureWizardWindow() => InitializeComponent();
+
+        /// <summary>Runs the wizard over both music scripts and returns the edited pair, or
+        /// nulls if it was cancelled. Neither input is modified - the wizard works on copies
+        /// and only returns ones that validated.
+        ///
+        /// Both files are taken together because a culture has to be wired into both to work:
+        /// battle_music.dat decides a battle's theme, campaign_music.dat the map theme and the
+        /// ambient layers. Either may be null when the editor only has one of the pair open,
+        /// and the wizard says so rather than silently doing half the job.</summary>
+        public static (MusicDatFile? Battle, MusicDatFile? Campaign) ShowDialog(
+            Window? owner, MusicDatFile? battle, MusicDatFile? campaign)
+        {
+            var viewModel = new AddCultureWizardViewModel(battle, campaign);
+            var window = new AddCultureWizardWindow { DataContext = viewModel, Owner = owner };
+            return window.ShowDialog() == true
+                ? (viewModel.EditedBattle, viewModel.EditedCampaign)
+                : (null, null);
+        }
+
+        void OnAddClick(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is not AddCultureWizardViewModel viewModel)
+                return;
+
+            // Stays open on failure so the reported problem is still on screen next to the
+            // inputs that caused it.
+            if (viewModel.TryApply())
+            {
+                DialogResult = true;
+                Close();
+            }
+        }
+
+        void OnCancelClick(object sender, RoutedEventArgs e)
+        {
+            DialogResult = false;
+            Close();
+        }
+    }
+}
