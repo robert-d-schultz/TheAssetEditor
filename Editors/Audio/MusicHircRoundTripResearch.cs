@@ -159,6 +159,40 @@ namespace Test.Audio
             failingActionTypes[actionType] = failingActionTypes.TryGetValue(actionType, out var count) ? count + 1 : 1;
         }
 
+        // Answers the question the whole music feature turns on: when an Action Event sets a State,
+        // what actually decides which music plays? Dumps the Music Switch containers and the State
+        // Groups their decision trees branch on, plus how many branches each has.
+        [Test]
+        public void ProbeMusicSwitchContainerArguments()
+        {
+            var banks = VanillaBankReader.ReadMusicBanks(BnkPack)
+                .Where(bank => bank.Path.Contains("music", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var (bankPath, bytes) in banks)
+            {
+                var bnk = BnkFile.CreateFromBytes(bytes, bankPath, true);
+                if (bnk.HircChunk == null)
+                    continue;
+
+                var switchContainers = bnk.HircChunk.HircItems
+                    .OfType<Shared.GameFormats.Wwise.Hirc.V136.CAkMusicSwitchCntr_V136>()
+                    .ToList();
+
+                if (switchContainers.Count == 0)
+                    continue;
+
+                TestContext.Out.WriteLine($"=== {bankPath} ===");
+                foreach (var container in switchContainers)
+                {
+                    var arguments = string.Join(", ", container.Arguments.Select(argument => $"{argument.GroupType}:{argument.GroupId}"));
+                    TestContext.Out.WriteLine(
+                        $"  MusicSwitch id={container.Id} depth={container.TreeDepth} args=[{arguments}] " +
+                        $"treeNodes={container.AkDecisionTree.Nodes.Count} rootChildren={container.AkDecisionTree.DecisionTree.Nodes.Count}");
+                }
+            }
+        }
+
         sealed class Tally
         {
             public int Total;
