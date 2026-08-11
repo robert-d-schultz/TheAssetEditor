@@ -72,7 +72,9 @@ namespace Editors.Audio.Shared.Wwise.Generators
         /// <summary>
         /// Folds one container's branches into another's, for the merger combining several mods.
         /// The base takes priority where both claim the same State, and everything outside the tree
-        /// comes from the base.
+        /// comes from the base. The merger starts from vanilla, so vanilla is what wins - the same
+        /// tie break the Dialogue Event merge uses. Branches normally add a subculture vanilla does
+        /// not have, so nothing collides and the order does not come up.
         /// </summary>
         public CAkMusicSwitchCntr_V136 MergeContainers(CAkMusicSwitchCntr_V136 baseContainer, CAkMusicSwitchCntr_V136 mergingContainer)
         {

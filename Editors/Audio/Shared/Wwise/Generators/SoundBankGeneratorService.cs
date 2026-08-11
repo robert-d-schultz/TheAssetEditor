@@ -369,19 +369,18 @@ namespace Editors.Audio.Shared.Wwise.Generators
 
                     _logger.Here().Information($"Merging Music Switch container {_audioRepository.GetNameFromId(vanillaContainer.Id)}");
 
-                    // The mods are folded together first and vanilla last, so every mod's branches
-                    // beat vanilla's. That is the opposite of the Dialogue Event merge, which starts
-                    // from vanilla - but a music branch is usually a replacement of a culture vanilla
-                    // already covers, and letting vanilla win would silently undo exactly the change
-                    // the modder tested and shipped.
-                    var mergedContainer = matchingModdedContainers[0];
-                    foreach (var moddedContainer in matchingModdedContainers.Skip(1))
+                    // Vanilla first, then each mod in turn, so vanilla wins a State two of them
+                    // claim - the same tie break the Dialogue Event merge uses. A branch adds a
+                    // subculture vanilla does not have, so in normal use nothing collides and the
+                    // order does not come up.
+                    var mergedContainer = vanillaContainer;
+                    foreach (var moddedContainer in matchingModdedContainers)
                     {
                         _logger.Here().Information($"Merging decision tree from {Path.GetFileName(moddedContainer.BnkFilePath)}");
                         mergedContainer = _musicSwitchContainerMergeService.MergeContainers(mergedContainer, moddedContainer);
                     }
 
-                    mergedContainers.Add(_musicSwitchContainerMergeService.MergeContainers(mergedContainer, vanillaContainer));
+                    mergedContainers.Add(mergedContainer);
                 }
 
                 if (mergedContainers.Count == 0)
