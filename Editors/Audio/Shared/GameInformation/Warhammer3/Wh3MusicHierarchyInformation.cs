@@ -81,11 +81,35 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         };
 
         /// <summary>
-        /// Whether a mod can give a State Group's States their own audio by merging a branch. False
-        /// means an Action Event setting one of its States still works and still fires, but has to
-        /// select music that already exists rather than bring its own.
+        /// The three State Groups read by switch tracks rather than by a decision tree. A State here
+        /// selects a sub-track inside vanilla Music Tracks, so serving one means adding a sub-track
+        /// to each of those tracks - see
+        /// <see cref="Wwise.Generators.AmsPulseTrackMergeService"/>.
+        ///
+        /// The tracks themselves are deliberately not listed. There are nine per Group and they are
+        /// found by asking the repository which switch tracks name the Group, so this survives a
+        /// patch adding or moving one in a way a table of ids would not.
         /// </summary>
-        public static bool CanCarryOwnAudio(string stateGroupName) => GetMusicSwitchContainerId(stateGroupName) != null;
+        public static bool IsAmsPulseStateGroup(string stateGroupName) => stateGroupName switch
+        {
+            "WH3_AMS_Pulse_Percussion_Options" => true,
+            "WH3_AMS_Pulse_Pitched_Orchestral_Options" => true,
+            "WH3_AMS_Pulse_Pitched_Ethnic_Options" => true,
+            _ => false
+        };
+
+        /// <summary>
+        /// Whether a mod can give a State Group's States their own audio. False means an Action Event
+        /// setting one of its States still works and still fires, but has to select audio that
+        /// already exists rather than bring its own.
+        ///
+        /// Two different mechanisms answer true here, and they produce quite different things: a
+        /// Group with a Music Switch container gets a whole music hierarchy of its own, while a pulse
+        /// Group gets a sub-track added to vanilla tracks. What they have in common is that a modder
+        /// can pick wavs and have them reached.
+        /// </summary>
+        public static bool CanCarryOwnAudio(string stateGroupName) =>
+            GetMusicSwitchContainerId(stateGroupName) != null || IsAmsPulseStateGroup(stateGroupName);
 
         /// <summary>
         /// Cue markers. Every vanilla music segment carries these same three ids: an entry cue at

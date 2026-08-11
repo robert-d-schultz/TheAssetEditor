@@ -121,6 +121,15 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
             if (audioFiles == null || audioFiles.Count == 0)
                 return;
 
+            // The pulse Groups are not reached through a decision tree at all - a State there picks a
+            // sub-track inside vanilla Music Tracks - so their audio is modelled and generated
+            // differently even though a modder picks wavs for them the same way.
+            if (Wh3MusicHierarchyInformation.IsAmsPulseStateGroup(stateGroupName))
+            {
+                AddAmsPulse(soundBank, stateGroupName, stateName, audioFiles);
+                return;
+            }
+
             var musicSwitchContainerId = Wh3MusicHierarchyInformation.GetMusicSwitchContainerId(stateGroupName);
             if (musicSwitchContainerId == null)
             {
@@ -161,6 +170,52 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
             var branch = _musicHierarchyFactory.CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateGroupName, stateName, audioFiles, soundBank.Language);
             soundBank.MusicRandomSequences.Add(branch.MusicRandomSequence);
             AddMusicSegments(soundBank, branch.MusicSegments, audioFiles);
+        }
+
+        /// <summary>
+        /// Audio for one of the pulse Groups. Every wav becomes a clip, and the clips are spread over
+        /// the vanilla switch tracks at compile time rather than here - which track a clip lands in
+        /// depends on how many the game has, and that is not something the project should record.
+        ///
+        /// Picking more audio for a State that already has clips extends the list, the same as adding
+        /// segments to an existing branch does.
+        /// </summary>
+        private void AddAmsPulse(SoundBank soundBank, string stateGroupName, string stateName, List<AudioFile> audioFiles)
+        {
+            var amsPulse = soundBank.AmsPulses
+                .FirstOrDefault(pulse => pulse.StateName == stateName && pulse.StateGroupName == stateGroupName);
+
+            if (amsPulse == null)
+            {
+                amsPulse = new AmsPulse { StateGroupName = stateGroupName, StateName = stateName };
+                soundBank.AmsPulses.Add(amsPulse);
+            }
+
+            foreach (var audioFile in audioFiles)
+            {
+                if (amsPulse.Clips.Any(clip => clip.SourceId == audioFile.Id))
+                    continue;
+
+                amsPulse.Clips.Add(new AmsPulseClip
+                {
+                    SourceId = audioFile.Id,
+                    Language = soundBank.Language
+                });
+
+                if (_audioEditorStateService.AudioProject.GetAudioFile(audioFile.Id) == null)
+                    _audioEditorStateService.AudioProject.AudioFiles.TryAdd(audioFile);
+            }
+        }
+
+        /// <summary>The pulse clips a removed Event's State contributed, dropped on the same
+        /// condition as a music branch: only when no remaining Event sets that State.</summary>
+        private static void RemoveAmsPulse(SoundBank soundBank, string stateGroupName, string stateName)
+        {
+            var amsPulse = soundBank.AmsPulses
+                .FirstOrDefault(pulse => pulse.StateName == stateName && pulse.StateGroupName == stateGroupName);
+
+            if (amsPulse != null)
+                soundBank.AmsPulses.Remove(amsPulse);
         }
 
         private void AddMusicSegments(SoundBank soundBank, List<MusicSegment> musicSegments, List<AudioFile> audioFiles)
@@ -245,6 +300,8 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
 
                 if (stillSet)
                     continue;
+
+                RemoveAmsPulse(soundBank, setStateAction.StateGroupName, setStateAction.StateName);
 
                 var musicRandomSequence = soundBank.MusicRandomSequences
                     .FirstOrDefault(randomSequence =>

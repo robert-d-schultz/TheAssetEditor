@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using System.IO;
 using Editors.Audio.Shared.AudioProject.Models;
 using Editors.Audio.Shared.Dat;
@@ -78,7 +78,7 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
                 // need somewhere to put them other than the .bnk the modder keeps. Music names its
                 // testing .bnks after the vanilla .bnks it overrides rather than after this one, so
                 // only the merging name is shared.
-                if (soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0)
+                if (soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0 || soundBank.AmsPulses.Count != 0)
                 {
                     // In WH3 .bnk files are loaded in descending name order. When a .bnk is loaded it overrides hircs with the same ID in .bnks loaded
                     // before it so the .bnk with the lowest alphanumeric name takes priority.
@@ -115,6 +115,9 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
 
                 if (soundBank.MusicSegments.Count != 0)
                     SetMusicData(audioProject, audioFiles, soundBank);
+
+                if (soundBank.AmsPulses.Count != 0)
+                    SetAmsPulseData(audioProject, audioFiles, soundBank);
             }
         }
 
@@ -130,6 +133,27 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
 
                 SetSoundData(audioFile, soundBank);
                 audioFiles.Add(audioFile);
+            }
+        }
+
+        /// <summary>
+        /// Pulse clips carry their audio directly, the same as a music segment, and need the same wem
+        /// paths setting. They have no Sound and no segment hirc of their own - the clip becomes a row
+        /// in a vanilla switch track - so this only has the audio file to prepare.
+        /// </summary>
+        private static void SetAmsPulseData(AudioProjectFile audioProject, List<AudioFile> audioFiles, SoundBank soundBank)
+        {
+            foreach (var amsPulse in soundBank.AmsPulses)
+            {
+                foreach (var clip in amsPulse.Clips)
+                {
+                    var audioFile = audioProject.GetAudioFile(clip.SourceId);
+                    if (audioFile == null)
+                        continue;
+
+                    SetSoundData(audioFile, soundBank);
+                    audioFiles.Add(audioFile);
+                }
             }
         }
 
@@ -227,6 +251,7 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
                 _wemGeneratorService.SaveWemsToPack(audioFiles);
                 UpdateSoundInMemoryMediaSize(audioProject, sounds);
                 UpdateMusicSegmentAudioData(audioProject);
+                UpdateAmsPulseAudioData(audioProject);
             }
         }
 
@@ -255,6 +280,30 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
             }
         }
 
+        /// <summary>
+        /// The same reckoning as a music segment's, for the same reason: the clip declares how long
+        /// its audio runs and how much of it to stream, and a wrong value desynchronises the pulse
+        /// from the music rather than failing. The encoded wem is the authority since it is what ships.
+        /// </summary>
+        private static void UpdateAmsPulseAudioData(AudioProjectFile audioProject)
+        {
+            foreach (var soundBank in audioProject.SoundBanks)
+            {
+                foreach (var clip in soundBank.AmsPulses.SelectMany(amsPulse => amsPulse.Clips))
+                {
+                    var audioFile = audioProject.GetAudioFile(clip.SourceId);
+                    if (audioFile == null || !File.Exists(audioFile.WemDiskFilePath))
+                        continue;
+
+                    var wemBytes = File.ReadAllBytes(audioFile.WemDiskFilePath);
+                    var wemFile = WemFile.CreateFromWemBytes(wemBytes);
+
+                    clip.InMemoryMediaSize = wemBytes.Length;
+                    clip.DurationMs = wemFile.FmtChunk.SampleCount / (double)wemFile.FmtChunk.SampleRate * 1000;
+                }
+            }
+        }
+
         private static void UpdateSoundInMemoryMediaSize(AudioProjectFile audioProject, List<Sound> sounds)
         {
             foreach (var sound in sounds)
@@ -270,7 +319,8 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
         {
             foreach (var soundBank in audioProject.SoundBanks)
             {
-                if (soundBank.ActionEvents.Count != 0 || soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0)
+                if (soundBank.ActionEvents.Count != 0 || soundBank.DialogueEvents.Count != 0
+                    || soundBank.MusicRandomSequences.Count != 0 || soundBank.AmsPulses.Count != 0)
                 {
                     _logger.Here().Information($"Generating SoundBank {soundBank.FilePath}");
 
@@ -284,14 +334,14 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
                         _soundBankGeneratorService.GenerateDialogueEventsForTestingSoundBank(soundBank);
                     }
 
-                    if (soundBank.MusicRandomSequences.Count != 0)
+                    if (soundBank.MusicRandomSequences.Count != 0 || soundBank.AmsPulses.Count != 0)
                     {
                         // The same for music: the mod's branches merged into the vanilla Music Switch
                         // containers, in .bnks named to override the vanilla ones they came from
                         _soundBankGeneratorService.GenerateMusicSwitchContainersForTestingSoundBanks(soundBank);
                     }
 
-                    if (soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0)
+                    if (soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0 || soundBank.AmsPulses.Count != 0)
                     {
                         // Create the .bnk that modders should give to the merger
                         _logger.Here().Information($"Generating SoundBank {soundBank.MergingFilePath}");

@@ -40,6 +40,13 @@ namespace Editors.Audio.Shared.AudioProject.Models
         public List<MusicRandomSequence> MusicRandomSequences { get; set; } = [];
         public List<MusicSegment> MusicSegments { get; set; } = [];
 
+        /// <summary>
+        /// Audio for the adaptive music system's pulse layers. Separate from the list above because
+        /// it produces no hirc of its own - it is added as sub-tracks to vanilla Music Tracks - so a
+        /// bank holding only these still has something to compile.
+        /// </summary>
+        public List<AmsPulse> AmsPulses { get; set; } = [];
+
         public SoundBank(string name, Wh3SoundBank gameSoundBank, string language)
         {
             Id = WwiseHash.Compute(name);
@@ -66,7 +73,12 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 .Where(musicRandomSequence => musicRandomSequence.Segments.Count != 0)
                 .ToList();
 
-            if (cleanedDialogueEvents.Count == 0 && cleanedActionEvents.Count == 0 && cleanedMusicRandomSequences.Count == 0)
+            var cleanedAmsPulses = AmsPulses
+                .Where(amsPulse => amsPulse.Clips.Count != 0)
+                .ToList();
+
+            if (cleanedDialogueEvents.Count == 0 && cleanedActionEvents.Count == 0
+                && cleanedMusicRandomSequences.Count == 0 && cleanedAmsPulses.Count == 0)
                 return null;
 
             return new SoundBank(Name, GameSoundBank, Language)
@@ -85,7 +97,8 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 Sounds = Sounds.ToList(),
                 RandomSequenceContainers = RandomSequenceContainers.ToList(),
                 MusicRandomSequences = cleanedMusicRandomSequences,
-                MusicSegments = MusicSegments.ToList()
+                MusicSegments = MusicSegments.ToList(),
+                AmsPulses = cleanedAmsPulses
             };
         }
 

@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using System.IO;
 using Editors.Audio.AudioEditor.Core;
 using Editors.Audio.Shared.AudioProject.Models;
@@ -38,6 +38,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
         private readonly HircGeneratorServiceFactory _hircGeneratorServiceFactory;
         private readonly IAudioEditorIntegrityService _audioEditorIntegrityService;
         private readonly IMusicSwitchContainerMergeService _musicSwitchContainerMergeService;
+        private readonly IAmsPulseTrackMergeService _amsPulseTrackMergeService;
 
         private readonly ILogger _logger = Logging.Create<SoundBankGeneratorService>();
 
@@ -46,13 +47,15 @@ namespace Editors.Audio.Shared.Wwise.Generators
             ApplicationSettingsService applicationSettingsService,
             IAudioRepository audioRepository,
             IAudioEditorIntegrityService audioEditorIntegrityService,
-            IMusicSwitchContainerMergeService musicSwitchContainerMergeService)
+            IMusicSwitchContainerMergeService musicSwitchContainerMergeService,
+            IAmsPulseTrackMergeService amsPulseTrackMergeService)
         {
             _fileSaveService = fileSaveService;
             _applicationSettingsService = applicationSettingsService;
             _audioRepository = audioRepository;
             _audioEditorIntegrityService = audioEditorIntegrityService;
             _musicSwitchContainerMergeService = musicSwitchContainerMergeService;
+            _amsPulseTrackMergeService = amsPulseTrackMergeService;
 
             var bankGeneratorVersion = (uint)GameInformationDatabase.GetGameById(_applicationSettingsService.CurrentSettings.CurrentGame).BankGeneratorVersion;
             _hircGeneratorServiceFactory = HircGeneratorServiceFactory.CreateFactory(bankGeneratorVersion);
@@ -176,6 +179,18 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 containers.Add(_musicSwitchContainerMergeService.MergeBranches(vanillaContainer, branches));
             }
 
+            // The pulse tracks are vanilla hircs too, and they live in the same .bnk as the campaign
+            // containers, so they belong in the same testing .bnk rather than one of their own -
+            // otherwise two .bnks would both claim to override campaign_music__core.
+            foreach (var moddedTrack in GenerateModdedAmsPulseTracks(soundBank))
+            {
+                var soundBankNameBase = GetSoundBankNameBase(moddedTrack.BnkFilePath);
+                if (!containersByVanillaSoundBankName.TryGetValue(soundBankNameBase, out var containers))
+                    containersByVanillaSoundBankName[soundBankNameBase] = containers = [];
+
+                containers.Add(moddedTrack);
+            }
+
             foreach (var (soundBankNameBase, containers) in containersByVanillaSoundBankName)
             {
                 // The same naming the Dialogue Event testing .bnk uses, for the same reason: '_1_'
@@ -188,6 +203,80 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 _logger.Here().Information($"Generating SoundBank {filePath}");
                 WriteSoundBank(id, soundBank.LanguageId, fileName, filePath, containers);
             }
+        }
+
+        /// <summary>
+        /// The vanilla pulse switch tracks re-emitted with this mod's sub-tracks added.
+        ///
+        /// Unlike the Music Switch containers there is no mod-only form of these. A sub-track is
+        /// identified by its position in the association array, so a track holding only the mod's
+        /// sub-tracks would number them from zero and mean something entirely different. Both the
+        /// testing and the merging .bnk therefore get the full merged track, and the merger works out
+        /// what each mod added by diffing against vanilla.
+        ///
+        /// Clips are spread across the tracks in order and cycled when a mod supplies fewer than the
+        /// game has, so one wav means the same pulse under every segment - which is thin, but is the
+        /// only thing that can be done without inventing material.
+        /// </summary>
+        private List<CAkMusicTrack_V136> GenerateModdedAmsPulseTracks(SoundBank soundBank)
+        {
+            var moddedTracks = new List<CAkMusicTrack_V136>();
+            if (soundBank.AmsPulses.Count == 0)
+                return moddedTracks;
+
+            foreach (var pulsesByStateGroup in soundBank.AmsPulses.GroupBy(amsPulse => amsPulse.StateGroupName))
+            {
+                var vanillaTracks = _audioRepository.GetVanillaAmsPulseTracks(pulsesByStateGroup.Key);
+                if (vanillaTracks.Count == 0)
+                {
+                    _logger.Here().Error(
+                        $"No vanilla switch track reads State Group {pulsesByStateGroup.Key}, so its audio cannot be reached");
+                    continue;
+                }
+
+                for (var trackIndex = 0; trackIndex < vanillaTracks.Count; trackIndex++)
+                {
+                    var vanillaTrack = vanillaTracks[trackIndex];
+
+                    var branches = pulsesByStateGroup
+                        .Where(amsPulse => amsPulse.Clips.Count != 0)
+                        .Select(amsPulse => new AmsPulseBranch(
+                            amsPulse.StateName,
+                            amsPulse.Clips[trackIndex % amsPulse.Clips.Count]))
+                        .ToList();
+
+                    if (branches.Count == 0)
+                        continue;
+
+                    var moddedTrack = _amsPulseTrackMergeService.AddSubTracks(
+                        vanillaTrack, branches, GetSegmentDurationMs(vanillaTrack));
+
+                    // Carried over so the testing .bnk can be named after the .bnk it overrides; the
+                    // merged track is a new object and would otherwise have no provenance.
+                    moddedTrack.BnkFilePath = vanillaTrack.BnkFilePath;
+                    moddedTracks.Add(moddedTrack);
+                }
+            }
+
+            return moddedTracks;
+        }
+
+        /// <summary>
+        /// How long the segment above a switch track runs. Every vanilla pulse clip is trimmed to
+        /// this rather than played whole, because a clip running past the segment overlaps the next.
+        /// </summary>
+        private double GetSegmentDurationMs(CAkMusicTrack_V136 vanillaTrack)
+        {
+            var segment = _audioRepository.GetHircs(vanillaTrack.NodeBaseParams.DirectParentId)
+                .OfType<CAkMusicSegment_V136>()
+                .FirstOrDefault();
+
+            if (segment != null)
+                return segment.Duration;
+
+            _logger.Here().Warning(
+                $"Music Track {vanillaTrack.Id} has no parent segment, so its clips cannot be trimmed to one");
+            return double.MaxValue;
         }
 
         /// <summary>
@@ -300,6 +389,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
             // branches alone so the merger can combine several mods before folding vanilla in.
             hircItems.AddRange(GenerateMusicHierarchyHircs(soundBank));
             hircItems.AddRange(GenerateModdedMusicSwitchContainers(soundBank));
+            hircItems.AddRange(GenerateModdedAmsPulseTracks(soundBank));
 
             WriteSoundBank(soundBank.MergingId, soundBank.LanguageId, soundBank.MergingFileName, soundBank.MergingFilePath, hircItems);
         }
@@ -349,12 +439,25 @@ namespace Editors.Audio.Shared.Wwise.Generators
         public void GenerateMergedMusicSoundBanks(List<string> moddedSoundBanks, string soundBankSuffix)
         {
             var moddedContainers = _audioRepository.GetModdedMusicSwitchContainers(moddedSoundBanks);
-            if (moddedContainers.Count == 0)
+            var moddedTracks = _audioRepository.GetModdedMusicTracks(moddedSoundBanks)
+                .OfType<CAkMusicTrack_V136>()
+                .Where(track => track.SwitchParams != null)
+                .ToList();
+
+            if (moddedContainers.Count == 0 && moddedTracks.Count == 0)
                 return;
+
+            var mergedTracksByBnk = MergeAmsPulseTracks(moddedTracks);
 
             foreach (var (vanillaBnkFilePath, vanillaContainers) in _audioRepository.GetVanillaMusicSwitchContainersByBnk())
             {
                 var mergedContainers = new List<HircItem>();
+
+                if (mergedTracksByBnk.TryGetValue(vanillaBnkFilePath, out var tracksForThisBnk))
+                {
+                    mergedContainers.AddRange(tracksForThisBnk);
+                    mergedTracksByBnk.Remove(vanillaBnkFilePath);
+                }
 
                 foreach (var vanillaHirc in vanillaContainers)
                 {
@@ -395,6 +498,49 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 _logger.Here().Information($"Merging Music Switch containers for SoundBank {filePath}");
                 WriteSoundBank(WwiseHash.Compute(soundBankNameWithoutExtension), vanillaContainers[0].LanguageId, fileName, filePath, mergedContainers);
             }
+        }
+
+        /// <summary>
+        /// Combines every mod's pulse switch tracks, keyed by the vanilla .bnk they override.
+        ///
+        /// Each mod's merging .bnk holds the whole track - vanilla plus its own sub-tracks - because
+        /// a sub-track has no identity apart from its position. So the merge starts from vanilla and
+        /// re-appends what each mod added in turn, which gives every mod's culture an index of its
+        /// own rather than letting the second mod overwrite the first.
+        /// </summary>
+        private Dictionary<string, List<HircItem>> MergeAmsPulseTracks(List<CAkMusicTrack_V136> moddedTracks)
+        {
+            var mergedTracksByBnk = new Dictionary<string, List<HircItem>>();
+
+            foreach (var tracksById in moddedTracks.GroupBy(track => track.Id))
+            {
+                var vanillaTrack = _audioRepository.GetHircs(tracksById.Key)
+                    .OfType<CAkMusicTrack_V136>()
+                    .FirstOrDefault(track => track.IsCA && track.SwitchParams != null);
+
+                if (vanillaTrack == null)
+                {
+                    _logger.Here().Error(
+                        $"Music Track {tracksById.Key} was not found in the vanilla data, so its sub-tracks cannot be merged");
+                    continue;
+                }
+
+                _logger.Here().Information($"Merging sub-tracks into Music Track {vanillaTrack.Id}");
+
+                var mergedTrack = vanillaTrack;
+                foreach (var moddedTrack in tracksById)
+                {
+                    _logger.Here().Information($"Merging sub-tracks from {Path.GetFileName(moddedTrack.BnkFilePath)}");
+                    mergedTrack = _amsPulseTrackMergeService.MergeTracks(mergedTrack, vanillaTrack, moddedTrack);
+                }
+
+                if (!mergedTracksByBnk.TryGetValue(vanillaTrack.BnkFilePath, out var tracksForBnk))
+                    mergedTracksByBnk[vanillaTrack.BnkFilePath] = tracksForBnk = [];
+
+                tracksForBnk.Add(mergedTrack);
+            }
+
+            return mergedTracksByBnk;
         }
 
         private List<HircItem> GenerateActionEventHircs(SoundBank soundBank, Dictionary<ActionEvent, HircItem> actionEventToHircLookup)

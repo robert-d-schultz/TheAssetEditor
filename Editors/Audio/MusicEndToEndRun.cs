@@ -41,6 +41,10 @@ namespace Test.Audio
         const string AudioState = "Araby";
         const string SubcultureKey = "ovn_sc_arb_araby";
 
+        /// <summary>The wizard lower-cases the Audio State before building event names and States off
+        /// it, since that is what the shipped scripts do.</summary>
+        const string MusicalCulture = "araby";
+
         const string AudioProjectFolder = @"audio\audio_projects";
         const uint CampaignSubcultureContainerId = 698158058;
         const uint BattleCultureContainerId = 26264058;
@@ -76,6 +80,7 @@ namespace Test.Audio
             ReportPackContents(modPack);
             AssertTheScriptsAndTheBankAgree(packFileService, compiledProject);
             AssertTheMergedContainersKeepVanilla(packFileService, provider.GetRequiredService<IAudioRepository>(), compiledProject);
+            AssertThePulseTracksCarryTheNewCulture(packFileService, provider.GetRequiredService<IAudioRepository>(), compiledProject);
 
             Directory.CreateDirectory(OutputDirectory);
             var packDiskPath = Path.Combine(OutputDirectory, "araby_music.pack");
@@ -267,6 +272,58 @@ namespace Test.Audio
 
             foreach (var path in testingBankPaths)
                 Console.WriteLine($"\n{path}: {string.Join(", ", ReadHircs(packFileService, path).Select(hirc => $"{hirc.HircType} {hirc.Id}"))}");
+        }
+
+        /// <summary>
+        /// The other half of what the wizard's rows can now carry: the three pulse Groups, which are
+        /// served by adding a sub-track to vanilla switch tracks rather than by merging a branch.
+        /// Every vanilla track for the Group has to get one, since a culture that only appears in
+        /// some of them falls back to Cathay for the rest of the loop.
+        /// </summary>
+        static void AssertThePulseTracksCarryTheNewCulture(
+            IPackFileService packFileService, IAudioRepository audioRepository, AudioProjectFile compiledProject)
+        {
+            var musicSoundBank = compiledProject.SoundBanks.Single(soundBank => soundBank.AmsPulses.Count != 0);
+            var stateId = WwiseHash.Compute(MusicalCulture);
+
+            var mergedTracks = packFileService.GetEditablePack().GetAllFiles()
+                .Select(file => file.Key)
+                .Where(path => path.EndsWith("_for_testing.bnk"))
+                .SelectMany(path => ReadHircs(packFileService, path))
+                .OfType<CAkMusicTrack_V136>()
+                .ToDictionary(track => track.Id);
+
+            Assert.Multiple(() =>
+            {
+                foreach (var amsPulse in musicSoundBank.AmsPulses)
+                {
+                    var vanillaTracks = audioRepository.GetVanillaAmsPulseTracks(amsPulse.StateGroupName);
+                    Assert.That(vanillaTracks, Is.Not.Empty, $"no vanilla switch track reads {amsPulse.StateGroupName}");
+
+                    foreach (var vanillaTrack in vanillaTracks)
+                    {
+                        Assert.That(mergedTracks.ContainsKey(vanillaTrack.Id), Is.True,
+                            $"{amsPulse.StateGroupName}: track {vanillaTrack.Id} was not re-emitted");
+
+                        var mergedTrack = mergedTracks[vanillaTrack.Id];
+                        var subTrack = mergedTrack.SwitchParams!.SwitchAssoc.IndexOf(stateId);
+
+                        Assert.That(subTrack, Is.Not.EqualTo(-1),
+                            $"{amsPulse.StateGroupName}: track {vanillaTrack.Id} has no sub-track for '{MusicalCulture}'");
+                        Assert.That(mergedTrack.PlaylistList.Any(clip => clip.TrackId == subTrack), Is.True,
+                            $"{amsPulse.StateGroupName}: the new sub-track on track {vanillaTrack.Id} has no clip");
+
+                        // The vanilla cultures have to keep the index they had, or the merged track
+                        // plays the wrong stem for every culture below the one that moved.
+                        for (var index = 0; index < vanillaTrack.SwitchParams!.SwitchAssoc.Count; index++)
+                            Assert.That(mergedTrack.SwitchParams.SwitchAssoc[index],
+                                Is.EqualTo(vanillaTrack.SwitchParams.SwitchAssoc[index]),
+                                $"track {vanillaTrack.Id}: sub-track {index} changed culture");
+                    }
+
+                    Console.WriteLine($"\n{amsPulse.StateGroupName}: {vanillaTracks.Count} track(s) given a '{MusicalCulture}' sub-track");
+                }
+            });
         }
 
         /// <summary>Walks both trees together, since a battle branch is a path rather than a single

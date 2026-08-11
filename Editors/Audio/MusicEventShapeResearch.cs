@@ -93,6 +93,141 @@ namespace Test.Audio
             DumpWholeDecisionTree(repository, 67383790);
 
             DumpWhatReadsTheAmsStateGroups(repository);
+            DumpEveryPulseSwitchTrack(repository);
+            DumpTheFragmentsSwitchContainer(repository);
+        }
+
+        /// <summary>
+        /// The ambient fragments Switch container and one of its children in full. This one is not
+        /// in the music hierarchy - it is a plain Switch container over Sounds - so serving it means
+        /// generating a Sound parented and bussed the way its siblings are, not a music segment.
+        /// </summary>
+        static void DumpTheFragmentsSwitchContainer(IAudioRepository repository)
+        {
+            TestContext.Out.WriteLine("\n=== ambient fragments Switch container ===");
+
+            if (Find(repository, 418295225) is not CAkSwitchCntr_V136 container)
+            {
+                TestContext.Out.WriteLine("  NOT FOUND");
+                return;
+            }
+
+            TestContext.Out.WriteLine(
+                $"  {container.Id} in {Path.GetFileName(container.BnkFilePath)} " +
+                $"parent={container.NodeBaseParams.DirectParentId} " +
+                $"bus={container.NodeBaseParams.OverrideBusId} " +
+                $"children={container.Children.ChildIds.Count}");
+
+            foreach (var switchPackage in container.SwitchList.OfType<CAkSwitchCntr_V136.CAkSwitchPackage_V136>())
+                TestContext.Out.WriteLine(
+                    $"  switch '{repository.GetNameFromId(switchPackage.SwitchId)}' -> {string.Join(", ", switchPackage.NodeIdList)}");
+
+            foreach (var childId in container.Children.ChildIds.Take(2))
+            {
+                var child = Find(repository, childId);
+                TestContext.Out.WriteLine($"  child {childId} is {child?.HircType.ToString() ?? "<missing>"}");
+
+                if (child is CAkSwitchCntr_V136 nested)
+                {
+                    TestContext.Out.WriteLine(
+                        $"    nested switch groupType={nested.EGroupType} group={nested.GroupId} " +
+                        $"'{repository.GetNameFromId(nested.GroupId)}' default='{repository.GetNameFromId(nested.DefaultSwitch)}' " +
+                        $"parent={nested.NodeBaseParams.DirectParentId} bus={nested.NodeBaseParams.OverrideBusId} " +
+                        $"children={nested.Children.ChildIds.Count}");
+
+                    foreach (var nestedPackage in nested.SwitchList.OfType<CAkSwitchCntr_V136.CAkSwitchPackage_V136>().Take(4))
+                        TestContext.Out.WriteLine(
+                            $"      '{repository.GetNameFromId(nestedPackage.SwitchId)}' -> {string.Join(", ", nestedPackage.NodeIdList)}");
+
+                    foreach (var grandChildId in nested.Children.ChildIds.Take(2))
+                    {
+                        var grandChild = Find(repository, grandChildId);
+                        TestContext.Out.WriteLine($"      grandchild {grandChildId} is {grandChild?.HircType.ToString() ?? "<missing>"}");
+
+                        if (grandChild is CAkRanSeqCntr_V136 grandRanSeq)
+                            TestContext.Out.WriteLine(
+                                $"        ranseq children={grandRanSeq.Children.ChildIds.Count} " +
+                                $"bus={grandRanSeq.NodeBaseParams.OverrideBusId}");
+
+                        if (grandChild is CAkSound_V136 grandSound)
+                            TestContext.Out.WriteLine(
+                                $"        sound source={grandSound.AkBankSourceData.AkMediaInformation.SourceId} " +
+                                $"streamType={grandSound.AkBankSourceData.StreamType} bus={grandSound.NodeBaseParams.OverrideBusId}");
+                    }
+                }
+
+                if (child is CAkSound_V136 sound)
+                    TestContext.Out.WriteLine(
+                        $"    sound parent={sound.NodeBaseParams.DirectParentId} bus={sound.NodeBaseParams.OverrideBusId} " +
+                        $"plugin={sound.AkBankSourceData.PluginId} streamType={sound.AkBankSourceData.StreamType} " +
+                        $"source={sound.AkBankSourceData.AkMediaInformation.SourceId}");
+
+                if (child is CAkRanSeqCntr_V136 ranSeq)
+                    TestContext.Out.WriteLine(
+                        $"    ranseq parent={ranSeq.NodeBaseParams.DirectParentId} bus={ranSeq.NodeBaseParams.OverrideBusId} " +
+                        $"children={ranSeq.Children.ChildIds.Count}");
+            }
+        }
+
+        /// <summary>
+        /// Every switch track carrying the pulses, in full. The question this answers is what a new
+        /// culture actually owes: there are nine tracks per Group, and whether that is nine separate
+        /// stems or the same stem reached nine ways decides whether serving these Groups is a
+        /// reasonable ask of a modder at all.
+        /// </summary>
+        static void DumpEveryPulseSwitchTrack(IAudioRepository repository)
+        {
+            string[] pulseGroups =
+            [
+                "WH3_AMS_Pulse_Percussion_Options",
+                "WH3_AMS_Pulse_Pitched_Orchestral_Options",
+                "WH3_AMS_Pulse_Pitched_Ethnic_Options"
+            ];
+
+            TestContext.Out.WriteLine("=== every pulse switch track ===");
+
+            foreach (var stateGroupName in pulseGroups)
+            {
+                var groupId = WwiseHash.Compute(stateGroupName);
+                TestContext.Out.WriteLine($"\n--- {stateGroupName} ---");
+
+                var tracks = repository.GetHircs(AkBkHircType.Music_Track)
+                    .OfType<CAkMusicTrack_V136>()
+                    .Where(track => track.SwitchParams?.GroupId == groupId)
+                    .ToList();
+
+                foreach (var track in tracks)
+                {
+                    var parentSegment = Find(repository, track.NodeBaseParams.DirectParentId) as CAkMusicSegment_V136;
+                    var grandParentId = parentSegment?.MusicNodeParams.NodeBaseParams.DirectParentId ?? 0;
+
+                    TestContext.Out.WriteLine(
+                        $"\n  track {track.Id} in {Path.GetFileName(track.BnkFilePath)}");
+                    TestContext.Out.WriteLine(
+                        $"    segment {track.NodeBaseParams.DirectParentId} -> ranseq/switch {grandParentId} " +
+                        $"({repository.GetNameFromId(grandParentId)}) segmentDuration={parentSegment?.Duration:0}");
+                    TestContext.Out.WriteLine(
+                        $"    subTracks={track.NumSubTrack} sources={track.SourceList.Count} clips={track.PlaylistList.Count} " +
+                        $"default='{repository.GetNameFromId(track.SwitchParams!.DefaultSwitch)}'");
+
+                    // The association array is indexed by sub-track, so this is the mapping that has
+                    // to stay aligned when a culture is added.
+                    for (var subTrack = 0; subTrack < track.SwitchParams.SwitchAssoc.Count; subTrack++)
+                    {
+                        var clip = track.PlaylistList.FirstOrDefault(item => item.TrackId == subTrack);
+                        TestContext.Out.WriteLine(
+                            $"      sub {subTrack} '{repository.GetNameFromId(track.SwitchParams.SwitchAssoc[subTrack])}' " +
+                            $"source={clip?.SourceId.ToString() ?? "<none>"} duration={clip?.SrcDuration ?? 0:0} " +
+                            $"playAt={clip?.PlayAt ?? 0:0} beginTrim={clip?.BeginTrimOffset ?? 0:0} endTrim={clip?.EndTrimOffset ?? 0:0}");
+
+                        var source = track.SourceList.FirstOrDefault(s => s.AkMediaInformation.SourceId == clip?.SourceId);
+                        if (source != null)
+                            TestContext.Out.WriteLine(
+                                $"        source plugin={source.PluginId} streamType={source.StreamType} " +
+                                $"inMemorySize={source.AkMediaInformation.InMemoryMediaSize}");
+                    }
+                }
+            }
         }
 
         /// <summary>
