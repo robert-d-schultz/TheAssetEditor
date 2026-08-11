@@ -31,14 +31,14 @@ namespace Shared.GameFormats.Wwise.Hirc.V112.Shared
             foreach (var value in PropsList)
                 memStream.Write(ByteParsers.Byte.EncodeValue((byte)value.Type, out _));
 
-            // Read all the Ids first 
+            // These are floats and must not be cast to byte on the way out - doing so truncated
+            // the fraction and wrapped anything negative, so a min of -1 was written back as 255.
             foreach (var value in PropsList)
             {
-                memStream.Write(ByteParsers.Single.EncodeValue((byte)value.Min, out _));
-                memStream.Write(ByteParsers.Single.EncodeValue((byte)value.Max, out _));
+                memStream.Write(ByteParsers.Single.EncodeValue(value.Min, out _));
+                memStream.Write(ByteParsers.Single.EncodeValue(value.Max, out _));
             }
 
-            // Then read the all min and max values.
             var byteArray = memStream.ToArray();
             if (byteArray.Length != GetSize())
                 throw new Exception("Invalid size");
