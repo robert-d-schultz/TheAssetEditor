@@ -239,13 +239,22 @@ namespace Test.Audio
             Assert.That(containerIds, Is.EquivalentTo(new[] { CampaignSubcultureContainerId, BattleCultureContainerId }),
                 "expected a branch in both the campaign subculture and the battle culture container");
 
+            // Only the ids the mod invented are its own to place. Vanilla's children stay wherever
+            // vanilla put them, so they are not something a testing .bnk has to carry.
+            var newHircIds = musicSoundBank.MusicRandomSequences
+                .Select(randomSequence => randomSequence.Id)
+                .ToHashSet();
+
             var testingBankPaths = packFileService.GetEditablePack().GetAllFiles()
                 .Select(file => file.Key)
                 .Where(path => path.EndsWith("_for_testing.bnk"))
                 .ToList();
 
-            var mergedContainers = testingBankPaths
-                .SelectMany(path => ReadHircs(packFileService, path))
+            var hircsByTestingBank = testingBankPaths
+                .ToDictionary(path => path, path => ReadHircs(packFileService, path));
+
+            var mergedContainers = hircsByTestingBank.Values
+                .SelectMany(hircs => hircs)
                 .OfType<CAkMusicSwitchCntr_V136>()
                 .ToDictionary(container => container.Id);
 
@@ -279,6 +288,22 @@ namespace Test.Audio
                         .ToList();
 
                     Assert.That(orphans, Is.Empty, $"container {containerId} names nodes it does not claim as children");
+
+                    // Vanilla keeps every child of these two containers in the same .bnk as the
+                    // container, so a testing .bnk that carries the container without the hierarchy
+                    // under it is not a shape the game is ever asked to load.
+                    var bankHircIds = hircsByTestingBank
+                        .Single(bank => bank.Value.Any(hirc => hirc.Id == containerId))
+                        .Value.Select(hirc => hirc.Id)
+                        .ToHashSet();
+
+                    var elsewhere = LeavesOf(merged.AkDecisionTree.DecisionTree)
+                        .Where(audioNodeId => audioNodeId != 0 && newHircIds.Contains(audioNodeId) && !bankHircIds.Contains(audioNodeId))
+                        .Distinct()
+                        .ToList();
+
+                    Assert.That(elsewhere, Is.Empty,
+                        $"container {containerId} names new nodes that are not in its own .bnk");
                 }
             });
 

@@ -70,8 +70,12 @@ namespace Test.Audio
 
             using var provider = VanillaBankReader.CreateProvider(GameDirectory);
             var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            // The merging .bnk never ships and carries the mod's branches alone, so indexing it here
+            // would shadow the fully merged container in the testing .bnk and hide vanilla's branches.
             IndexBanks(hircs, modPack.GetAllFiles()
-                .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
+                .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)
+                    && !file.Key.Contains("_for_merging", StringComparison.OrdinalIgnoreCase))
                 .Select(file => (file.Key, file.Value.DataSource.ReadData()))
                 .ToList());
 
@@ -323,6 +327,211 @@ namespace Test.Audio
                 if (item.SegmentId != 0)
                     DumpTarget(hircs, item.SegmentId, indent + "  ", depth + 1);
                 DumpPlaylist(hircs, item.PlayList, indent + "  ", depth);
+            }
+        }
+
+        /// <summary>Which .bnk holds each child of the two containers, in vanilla. If vanilla always
+        /// keeps a music child in the same .bnk as its parent then a mod that splits them across two
+        /// .bnks is not doing what the game does, however correct the ids look.</summary>
+        [Test]
+        public void WhetherVanillaKeepsMusicChildrenInTheParentsBank()
+        {
+            var bankByHirc = new Dictionary<uint, string>();
+            var containersByBank = new Dictionary<uint, (string Bank, List<uint> Children)>();
+
+            foreach (var packName in new[] { "audio_base_bnk.pack", "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                foreach (var (path, bytes) in VanillaBankReader.ReadMusicBanks(packPath))
+                {
+                    BnkFile bnk;
+                    try
+                    {
+                        bnk = BnkFile.CreateFromBytes(bytes, path, false);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    foreach (var hirc in bnk.HircChunk?.HircItems ?? [])
+                    {
+                        bankByHirc[hirc.Id] = path;
+                        if (hirc is CAkMusicSwitchCntr_V136 container && (container.Id == 698158058 || container.Id == 26264058))
+                            containersByBank[container.Id] = (path, container.MusicTransNodeParams.MusicNodeParams.Children.ChildIds);
+                    }
+                }
+            }
+
+            foreach (var (containerId, (bank, children)) in containersByBank)
+            {
+                Console.WriteLine($"\n################ {containerId} lives in {bank} ################");
+                foreach (var group in children.GroupBy(childId => bankByHirc.TryGetValue(childId, out var b) ? b : "!! nowhere"))
+                    Console.WriteLine($"  {group.Count()} of {children.Count} children in {group.Key}");
+            }
+        }
+
+        /// <summary>Where vanilla keeps its music media, next to where the mod put its own. A track
+        /// that streams is silent unless the game finds the .wem where it expects it, and the mod
+        /// only ever writes to the sfx path the sound banks use.</summary>
+        [Test]
+        public void WhereTheMusicMediaLives()
+        {
+            foreach (var packName in new[] { "audio_base_m.pack", "audio_base.pack", "audio_base_bnk.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                using var vanillaProvider = VanillaBankReader.CreateProvider(GameDirectory);
+                var pack = VanillaBankReader.OpenPack(vanillaProvider, packPath);
+
+                var wems = pack.GetAllFiles()
+                    .Where(file => file.Key.EndsWith(".wem", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                Console.WriteLine($"\n================ {packName} ================");
+                Console.WriteLine($"{wems.Count} wem(s)");
+                foreach (var folder in wems.GroupBy(file => Path.GetDirectoryName(file.Key)).OrderByDescending(group => group.Count()))
+                    Console.WriteLine($"  {folder.Key}  x{folder.Count()}   e.g. {folder.First().Key}");
+            }
+
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+            Console.WriteLine($"\n================ the mod's pack ================");
+            foreach (var file in modPack.GetAllFiles().OrderBy(file => file.Key))
+                Console.WriteLine($"  {file.Key}  ({file.Value.DataSource.Size} bytes)");
+        }
+
+        /// <summary>A vanilla music track's source, so the mod's can be read against it rather than
+        /// against an assumption about how music is packaged.</summary>
+        [Test]
+        public void HowVanillaMusicTracksCarryTheirAudio()
+        {
+            foreach (var packName in new[] { "audio_base_bnk.pack", "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                foreach (var (path, bytes) in VanillaBankReader.ReadMusicBanks(packPath))
+                {
+                    BnkFile bnk;
+                    try
+                    {
+                        bnk = BnkFile.CreateFromBytes(bytes, path, false);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    var tracks = (bnk.HircChunk?.HircItems ?? []).OfType<CAkMusicTrack_V136>().ToList();
+                    if (tracks.Count == 0)
+                        continue;
+
+                    var sources = tracks.SelectMany(track => track.SourceList).ToList();
+                    Console.WriteLine($"\n{packName}  {path}: {tracks.Count} track(s), {sources.Count} source(s)");
+                    foreach (var group in sources.GroupBy(source => (source.StreamType, source.PluginId)))
+                        Console.WriteLine($"  {group.Key.StreamType} plugin {group.Key.PluginId} x{group.Count()}" +
+                            $"   e.g. source {group.First().AkMediaInformation.SourceId} inMemory {group.First().AkMediaInformation.InMemoryMediaSize}");
+                }
+            }
+        }
+
+        /// <summary>The size a music source declares in the .bnk against the size of the .wem it
+        /// names. The mod writes the whole file size there; if vanilla writes something much smaller
+        /// then the field is a prefetch buffer, and claiming a prefetch the .bnk does not carry is a
+        /// reason for a segment to select and then play nothing.</summary>
+        [Test]
+        public void WhatMusicSourcesDeclareAgainstTheWemTheyName()
+        {
+            var wemSizeById = new Dictionary<uint, long>();
+            foreach (var packName in new[] { "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                using var vanillaProvider = VanillaBankReader.CreateProvider(GameDirectory);
+                foreach (var file in VanillaBankReader.OpenPack(vanillaProvider, packPath).GetAllFiles())
+                {
+                    if (file.Key.EndsWith(".wem", StringComparison.OrdinalIgnoreCase)
+                        && uint.TryParse(Path.GetFileNameWithoutExtension(file.Key), out var sourceId))
+                        wemSizeById[sourceId] = file.Value.DataSource.Size;
+                }
+            }
+
+            Console.WriteLine($"{wemSizeById.Count} vanilla wems indexed");
+
+            foreach (var bankName in new[] { "global_music__core.bnk", "campaign_music__core.bnk", "battle_music__core.bnk" })
+            {
+                var bytes = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                    .FirstOrDefault(bank => bank.Path.EndsWith(bankName, StringComparison.OrdinalIgnoreCase));
+                if (bytes.Bytes == null)
+                    continue;
+
+                var sources = (BnkFile.CreateFromBytes(bytes.Bytes, bytes.Path, false).HircChunk?.HircItems ?? [])
+                    .OfType<CAkMusicTrack_V136>()
+                    .SelectMany(track => track.SourceList)
+                    .Where(source => wemSizeById.ContainsKey(source.AkMediaInformation.SourceId))
+                    .ToList();
+
+                if (sources.Count == 0)
+                    continue;
+
+                var wholeFile = sources.Count(source => source.AkMediaInformation.InMemoryMediaSize == wemSizeById[source.AkMediaInformation.SourceId]);
+
+                Console.WriteLine($"\n{bankName}: {sources.Count} source(s) whose wem was found");
+                Console.WriteLine($"  declared == whole wem: {wholeFile}");
+                Console.WriteLine($"  declared <  whole wem: {sources.Count - wholeFile}");
+
+                foreach (var source in sources.Take(6))
+                    Console.WriteLine($"    source {source.AkMediaInformation.SourceId}: " +
+                        $"declared {source.AkMediaInformation.InMemoryMediaSize}, wem {wemSizeById[source.AkMediaInformation.SourceId]}");
+            }
+
+            Console.WriteLine($"\nthe mod declares 817726 for source 121350730, whose wem is 817726 bytes (the whole file)");
+
+            // Sfx is the pattern the editor already ships and modders already hear, so whether
+            // vanilla sounds declare the whole file decides if this is a music-only mistake or just
+            // how the editor has always written the field.
+            var soundBanks = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"));
+            var checkedBanks = 0;
+
+            foreach (var (sfxBankName, bankBytes) in soundBanks)
+            {
+                if (checkedBanks >= 3)
+                    break;
+
+                List<CAkSound_V136> sounds;
+                try
+                {
+                    sounds = (BnkFile.CreateFromBytes(bankBytes, sfxBankName, false).HircChunk?.HircItems ?? [])
+                        .OfType<CAkSound_V136>()
+                        .Where(sound => wemSizeById.ContainsKey(sound.AkBankSourceData.AkMediaInformation.SourceId))
+                        .ToList();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (sounds.Count == 0)
+                    continue;
+
+                checkedBanks++;
+                var wholeFile = sounds.Count(sound =>
+                    sound.AkBankSourceData.AkMediaInformation.InMemoryMediaSize == wemSizeById[sound.AkBankSourceData.AkMediaInformation.SourceId]);
+
+                Console.WriteLine($"\n{sfxBankName}: {sounds.Count} sound(s), declared == whole wem: {wholeFile}");
+                foreach (var sound in sounds.Take(4))
+                    Console.WriteLine($"    {sound.AkBankSourceData.StreamType} source {sound.AkBankSourceData.AkMediaInformation.SourceId}: " +
+                        $"declared {sound.AkBankSourceData.AkMediaInformation.InMemoryMediaSize}, " +
+                        $"wem {wemSizeById[sound.AkBankSourceData.AkMediaInformation.SourceId]}");
             }
         }
 

@@ -110,10 +110,20 @@ namespace Editors.Audio.Shared.Wwise.Generators
         /// are - it is only the Music Switch container above them that clashes with vanilla.
         /// </summary>
         private List<HircItem> GenerateMusicHierarchyHircs(SoundBank soundBank)
+            => GenerateMusicHierarchyHircs(soundBank, soundBank.MusicRandomSequences);
+
+        /// <summary>
+        /// The same hierarchy for a chosen few of the sequences, so a testing .bnk can carry exactly
+        /// the ones the container it overrides names as children. Vanilla never splits a music
+        /// container from its children across two .bnks - every one of the 32 children of the two
+        /// containers this touches sits in the same .bnk as its parent - so a testing .bnk holding a
+        /// container alone is not the shape the game is built to load.
+        /// </summary>
+        private List<HircItem> GenerateMusicHierarchyHircs(SoundBank soundBank, IEnumerable<MusicRandomSequence> musicRandomSequences)
         {
             var hircItems = new List<HircItem>();
 
-            foreach (var musicRandomSequence in soundBank.MusicRandomSequences)
+            foreach (var musicRandomSequence in musicRandomSequences)
             {
                 foreach (var musicSegment in soundBank.GetMusicSegments(musicRandomSequence))
                 {
@@ -170,6 +180,11 @@ namespace Editors.Audio.Shared.Wwise.Generators
         {
             var containersByVanillaSoundBankName = new Dictionary<string, List<HircItem>>();
 
+            // The sequences whose container ends up in each testing .bnk, so the hierarchy under them
+            // can be written into the same .bnk. A container that names a child living in another
+            // .bnk is not something vanilla ever does.
+            var musicRandomSequencesByVanillaSoundBankName = new Dictionary<string, List<MusicRandomSequence>>();
+
             foreach (var (containerId, branches) in GetMusicBranchesByContainerId(soundBank))
             {
                 var vanillaContainer = GetVanillaMusicSwitchContainer(containerId);
@@ -181,6 +196,12 @@ namespace Editors.Audio.Shared.Wwise.Generators
                     containersByVanillaSoundBankName[soundBankNameBase] = containers = [];
 
                 containers.Add(_musicSwitchContainerMergeService.MergeBranches(vanillaContainer, branches));
+
+                if (!musicRandomSequencesByVanillaSoundBankName.TryGetValue(soundBankNameBase, out var musicRandomSequences))
+                    musicRandomSequencesByVanillaSoundBankName[soundBankNameBase] = musicRandomSequences = [];
+
+                musicRandomSequences.AddRange(soundBank.MusicRandomSequences
+                    .Where(musicRandomSequence => musicRandomSequence.DirectParentId == containerId));
             }
 
             // The pulse tracks are vanilla hircs too, and they live in the same .bnk as the campaign
@@ -213,8 +234,16 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 var filePath = GetSoundBankFilePath(fileName, soundBank.Language);
                 var id = WwiseHash.Compute(Path.GetFileNameWithoutExtension(fileName));
 
+                // The hierarchy goes in ahead of the containers over it, the same order the merging
+                // .bnk uses, so a child is read before the container that claims it.
+                var hircItems = new List<HircItem>();
+                if (musicRandomSequencesByVanillaSoundBankName.TryGetValue(soundBankNameBase, out var musicRandomSequences))
+                    hircItems.AddRange(GenerateMusicHierarchyHircs(soundBank, musicRandomSequences));
+
+                hircItems.AddRange(containers);
+
                 _logger.Here().Information($"Generating SoundBank {filePath}");
-                WriteSoundBank(id, soundBank.LanguageId, fileName, filePath, containers);
+                WriteSoundBank(id, soundBank.LanguageId, fileName, filePath, hircItems);
             }
         }
 
