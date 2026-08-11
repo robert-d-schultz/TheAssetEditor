@@ -1,4 +1,4 @@
-using Editors.Audio.Shared.GameInformation.Warhammer3;
+﻿using Editors.Audio.Shared.GameInformation.Warhammer3;
 using Editors.Audio.Shared.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -75,6 +75,90 @@ namespace Test.Audio
 
             foreach (var eventName in EventsOfInterest)
                 DumpEvent(repository, eventName);
+
+            // The other half of the picture: what the State an event sets actually selects. A
+            // branch has to be merged into one of these trees for a new State to play anything,
+            // so this walks a couple of vanilla branches end to end as the template to generate.
+            DumpMusicSwitchBranches(repository, 698158058, "WH3_Campaign_Subcultures");
+            DumpMusicSwitchBranches(repository, 26264058, "Battle_Music_WH3_Culture");
+        }
+
+        static void DumpMusicSwitchBranches(IAudioRepository repository, uint switchContainerId, string label)
+        {
+            TestContext.Out.WriteLine($"=== MusicSwitch {switchContainerId} ({label}) ===");
+
+            if (Find(repository, switchContainerId) is not CAkMusicSwitchCntr_V136 container)
+            {
+                TestContext.Out.WriteLine("  NOT FOUND");
+                return;
+            }
+
+            foreach (var argument in container.Arguments)
+                TestContext.Out.WriteLine($"  arg {argument.GroupType} {argument.GroupId} '{repository.GetNameFromId(argument.GroupId)}'");
+
+            foreach (var node in container.AkDecisionTree.DecisionTree.Nodes.Take(3))
+            {
+                TestContext.Out.WriteLine(
+                    $"  node key={node.Key} '{repository.GetNameFromId(node.Key)}' -> audioNodeId={node.AudioNodeId} " +
+                    $"weight={node.Weight} probability={node.Probability}");
+                DumpMusicTarget(repository, node.AudioNodeId, "    ", depth: 0);
+            }
+        }
+
+        static void DumpMusicTarget(IAudioRepository repository, uint id, string indent, int depth)
+        {
+            if (depth > 2 || id == 0)
+                return;
+
+            var target = Find(repository, id);
+            if (target == null)
+            {
+                TestContext.Out.WriteLine($"{indent}{id}: NOT FOUND");
+                return;
+            }
+
+            TestContext.Out.WriteLine($"{indent}{target.HircType} id={target.Id}");
+
+            if (target is CAkMusicRanSeqCntr_V136 ranSeq)
+            {
+                var roots = ranSeq.PlayList;
+                TestContext.Out.WriteLine($"{indent}  playlistRoots={roots.Count} parent={ranSeq.MusicTransNodeParams.MusicNodeParams.NodeBaseParams.DirectParentId} rules={ranSeq.MusicTransNodeParams.PlayList.Count}");
+                foreach (var item in roots.SelectMany(root => root.PlayList).Take(2))
+                    DumpMusicTarget(repository, item.SegmentId, indent + "    ", depth + 1);
+            }
+
+            if (target is CAkMusicSegment_V136 segment)
+            {
+                var nodeParams = segment.MusicNodeParams;
+                TestContext.Out.WriteLine(
+                    $"{indent}  duration={segment.Duration} markers={segment.ArrayMarkersList.Count} " +
+                    $"children={nodeParams.Children.ChildIds.Count} parent={nodeParams.NodeBaseParams.DirectParentId} " +
+                    $"bus={nodeParams.NodeBaseParams.OverrideBusId} tempo={nodeParams.AkMeterInfo.Tempo}");
+
+                foreach (var marker in segment.ArrayMarkersList)
+                    TestContext.Out.WriteLine($"{indent}    marker id={marker.Id} pos={marker.Position} name='{marker.MarkerName}'");
+
+                foreach (var childId in nodeParams.Children.ChildIds.Take(2))
+                    DumpMusicTarget(repository, childId, indent + "    ", depth + 1);
+            }
+
+            if (target is CAkMusicTrack_V136 track)
+            {
+                TestContext.Out.WriteLine(
+                    $"{indent}  trackType={track.TrackType} sources={track.SourceList.Count} playlist={track.PlaylistList.Count} " +
+                    $"subTracks={track.NumSubTrack} lookAhead={track.LookAheadTime} parent={track.NodeBaseParams.DirectParentId} " +
+                    $"bus={track.NodeBaseParams.OverrideBusId}");
+
+                foreach (var source in track.SourceList)
+                    TestContext.Out.WriteLine(
+                        $"{indent}    source pluginId={source.PluginId} streamType={source.StreamType} " +
+                        $"sourceId={source.AkMediaInformation.SourceId} inMemorySize={source.AkMediaInformation.InMemoryMediaSize}");
+
+                foreach (var clip in track.PlaylistList)
+                    TestContext.Out.WriteLine(
+                        $"{indent}    clip track={clip.TrackId} source={clip.SourceId} playAt={clip.PlayAt} " +
+                        $"beginTrim={clip.BeginTrimOffset} endTrim={clip.EndTrimOffset} duration={clip.SrcDuration}");
+            }
         }
 
         static void DumpEvent(IAudioRepository repository, string eventName)
@@ -170,3 +254,4 @@ namespace Test.Audio
             repository.HircsById.TryGetValue(id, out var items) ? items.FirstOrDefault() : null;
     }
 }
+
