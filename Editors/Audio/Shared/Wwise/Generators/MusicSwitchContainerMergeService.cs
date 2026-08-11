@@ -89,9 +89,9 @@ namespace Editors.Audio.Shared.Wwise.Generators
         /// <summary>
         /// A new container rather than the one passed in. The vanilla hirc belongs to the audio
         /// repository and is shared with everything else reading vanilla data, so this must not edit
-        /// it in place. Everything outside the decision tree is carried over unchanged - the
-        /// arguments, the mode and the transition parameters are what make the container the one the
-        /// game is already asking for.
+        /// it in place. Everything outside the decision tree and the child list is carried over
+        /// unchanged - the arguments, the mode and the transition parameters are what make the
+        /// container the one the game is already asking for.
         /// </summary>
         private static CAkMusicSwitchCntr_V136 CopyWithDecisionTree(CAkMusicSwitchCntr_V136 vanillaContainer, AkDecisionTree_V136.Node_V136 decisionTree)
         {
@@ -99,7 +99,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
             {
                 Id = vanillaContainer.Id,
                 HircType = vanillaContainer.HircType,
-                MusicTransNodeParams = vanillaContainer.MusicTransNodeParams,
+                MusicTransNodeParams = CopyWithChildren(vanillaContainer.MusicTransNodeParams, decisionTree),
                 IsContinuePlayback = vanillaContainer.IsContinuePlayback,
                 TreeDepth = vanillaContainer.TreeDepth,
                 Arguments = [.. vanillaContainer.Arguments],
@@ -114,6 +114,60 @@ namespace Editors.Audio.Shared.Wwise.Generators
             container.TreeDataSize = container.AkDecisionTree.GetSize();
             container.UpdateSectionSize();
             return container;
+        }
+
+        /// <summary>
+        /// The transition parameters with a child list that covers the merged tree. A decision tree
+        /// leaf is only resolved if the container also claims that node as a child, so adding a
+        /// branch and leaving the child list alone gives a container that silently falls through to
+        /// its default - which for a new culture means vanilla music keeps playing. Vanilla lists
+        /// its children in ascending id order and this keeps to that.
+        ///
+        /// Everything but the child list is shared with the vanilla hirc rather than copied, which
+        /// is safe only because nothing here writes to it.
+        /// </summary>
+        private static MusicTransNodeParams_V136 CopyWithChildren(MusicTransNodeParams_V136 vanillaParams, AkDecisionTree_V136.Node_V136 decisionTree)
+        {
+            var childIds = new SortedSet<uint>(vanillaParams.MusicNodeParams.Children.ChildIds);
+            foreach (var audioNodeId in CollectAudioNodeIds(decisionTree))
+            {
+                // The default at a level is stored as a key of zero with no node behind it.
+                if (audioNodeId != 0)
+                    childIds.Add(audioNodeId);
+            }
+
+            var vanillaNodeParams = vanillaParams.MusicNodeParams;
+            return new MusicTransNodeParams_V136
+            {
+                NumRules = vanillaParams.NumRules,
+                PlayList = vanillaParams.PlayList,
+                MusicNodeParams = new MusicNodeParams_V136
+                {
+                    Flags = vanillaNodeParams.Flags,
+                    NodeBaseParams = vanillaNodeParams.NodeBaseParams,
+                    AkMeterInfo = vanillaNodeParams.AkMeterInfo,
+                    MeterInfoFlag = vanillaNodeParams.MeterInfoFlag,
+                    NumStingers = vanillaNodeParams.NumStingers,
+                    StingersList = vanillaNodeParams.StingersList,
+                    Children = new Children_V136
+                    {
+                        NumChilds = (uint)childIds.Count,
+                        ChildIds = [.. childIds]
+                    }
+                }
+            };
+        }
+
+        private static IEnumerable<uint> CollectAudioNodeIds(AkDecisionTree_V136.Node_V136 node)
+        {
+            foreach (var child in node.Nodes)
+            {
+                if (child.Nodes.Count == 0)
+                    yield return child.AudioNodeId;
+                else
+                    foreach (var audioNodeId in CollectAudioNodeIds(child))
+                        yield return audioNodeId;
+            }
         }
 
         /// <summary>

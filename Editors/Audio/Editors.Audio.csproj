@@ -20,6 +20,7 @@
 	  <Compile Remove="AmsPulseTrackMergeTests.cs" />
 	  <Compile Remove="MusicEndToEndRun.cs" />
 	  <Compile Remove="MusicEventShapeResearch.cs" />
+	  <Compile Remove="MusicShippedPackDiagnosis.cs" />
 	  <Compile Remove="MusicHierarchyFactoryTests.cs" />
 	  <Compile Remove="MusicHierarchyGenerationTests.cs" />
 	  <Compile Remove="MusicSwitchContainerMergeTests.cs" />

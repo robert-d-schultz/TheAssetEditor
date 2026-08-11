@@ -268,6 +268,17 @@ namespace Test.Audio
                         Is.EqualTo(vanilla.Arguments.Select(argument => argument.GroupId)));
 
                     AssertVanillaBranchesSurvive(vanilla.AkDecisionTree.DecisionTree, merged.AkDecisionTree.DecisionTree, containerId);
+
+                    // Nothing the tree names plays unless the container also claims it as a child,
+                    // and a missing child is silent rather than an error - the container just takes
+                    // its default, which is vanilla's music under a new culture's name.
+                    var childIds = merged.MusicTransNodeParams.MusicNodeParams.Children.ChildIds;
+                    var orphans = LeavesOf(merged.AkDecisionTree.DecisionTree)
+                        .Where(audioNodeId => audioNodeId != 0 && !childIds.Contains(audioNodeId))
+                        .Distinct()
+                        .ToList();
+
+                    Assert.That(orphans, Is.Empty, $"container {containerId} names nodes it does not claim as children");
                 }
             });
 
@@ -398,6 +409,9 @@ namespace Test.Audio
                 $"\nfragments: '{MusicalCulture}' -> key switch {amsFragment.KeySwitchContainerId} " +
                 $"({keySwitch.SwitchList.Count} keys) -> {amsFragment.TargetHircId} -> {amsFragment.SoundIds.Count} sound(s)");
         }
+
+        static IEnumerable<uint> LeavesOf(AkDecisionTree_V136.Node_V136 node) =>
+            node.Nodes.SelectMany(child => child.Nodes.Count == 0 ? [child.AudioNodeId] : LeavesOf(child));
 
         /// <summary>Walks both trees together, since a battle branch is a path rather than a single
         /// node and a loss further down is just as silent as one at the top.</summary>

@@ -120,6 +120,53 @@ namespace Test.Audio
             });
         }
 
+        // A container only resolves a decision tree leaf to a node it also claims as a child. A
+        // branch added without the matching child is not an error - the container just falls
+        // through to its default, so the new culture silently gets vanilla's music. That is what
+        // the first end to end pack did, and what these three pin down.
+        [Test]
+        public void TheNewBranchIsAlsoDeclaredAsAChild()
+        {
+            var merged = new MusicSwitchContainerMergeService()
+                .MergeBranches(CreateVanillaContainer(), [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
+
+            var children = merged.MusicTransNodeParams.MusicNodeParams.Children;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(children.ChildIds, Does.Contain(NewRanSeqId));
+                Assert.That(children.ChildIds, Does.Contain(1056018414u), "vanilla's child was dropped");
+                Assert.That(children.NumChilds, Is.EqualTo((uint)children.ChildIds.Count));
+                Assert.That(children.ChildIds, Is.Ordered, "vanilla lists children in ascending id order");
+            });
+        }
+
+        [Test]
+        public void EveryLeafOfAMergedBattleTreeIsDeclaredAsAChild()
+        {
+            var merged = new MusicSwitchContainerMergeService()
+                .MergeBranches(CreateVanillaBattleContainer(), [new MusicBranch(BattleCultureStateGroup, "Araby", NewRanSeqId)]);
+
+            var childIds = merged.MusicTransNodeParams.MusicNodeParams.Children.ChildIds;
+
+            Assert.That(LeavesOf(merged.AkDecisionTree.DecisionTree).Where(id => id != 0).Distinct(),
+                Is.SubsetOf(childIds));
+        }
+
+        [Test]
+        public void TheChildListIsNotSharedWithTheVanillaContainer()
+        {
+            // The vanilla hirc belongs to the audio repository, so a child list added to in place
+            // would leak the mod's node into every later read of vanilla.
+            var vanillaContainer = CreateVanillaContainer();
+
+            new MusicSwitchContainerMergeService()
+                .MergeBranches(vanillaContainer, [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
+
+            Assert.That(vanillaContainer.MusicTransNodeParams.MusicNodeParams.Children.ChildIds,
+                Does.Not.Contain(NewRanSeqId));
+        }
+
         [Test]
         public void MergingDoesNotEditTheVanillaContainer()
         {
@@ -275,6 +322,22 @@ namespace Test.Audio
 
         // Stands in for the vanilla Battle_Music_WH3_Culture container 26264058: result first, then
         // culture, no default at either level - trimmed to two of its sixteen cultures.
+        /// <summary>Vanilla declares every node its tree names as a child of the container, and
+        /// only children are resolved, so the fixtures have to do the same or the merged child
+        /// list has nothing to be wrong about.</summary>
+        static void DeclareLeavesAsChildren(CAkMusicSwitchCntr_V136 container, AkDecisionTree_V136.Node_V136 root)
+        {
+            var childIds = new SortedSet<uint>(LeavesOf(root).Where(audioNodeId => audioNodeId != 0));
+            container.MusicTransNodeParams.MusicNodeParams.Children = new Children_V136
+            {
+                NumChilds = (uint)childIds.Count,
+                ChildIds = [.. childIds]
+            };
+        }
+
+        static IEnumerable<uint> LeavesOf(AkDecisionTree_V136.Node_V136 node) =>
+            node.Nodes.SelectMany(child => child.Nodes.Count == 0 ? [child.AudioNodeId] : LeavesOf(child));
+
         static CAkMusicSwitchCntr_V136 CreateVanillaBattleContainer()
         {
             var container = new CAkMusicSwitchCntr_V136
@@ -306,6 +369,8 @@ namespace Test.Audio
 
                 root.Nodes.Add(resultNode);
             }
+
+            DeclareLeavesAsChildren(container, root);
 
             container.AkDecisionTree = new AkDecisionTree_V136
             {
@@ -343,6 +408,8 @@ namespace Test.Audio
                     CreateBranch(WwiseHash.Compute("Dwarfs"), 1056018414)
                 ]
             };
+
+            DeclareLeavesAsChildren(container, root);
 
             container.AkDecisionTree = new AkDecisionTree_V136
             {
