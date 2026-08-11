@@ -1017,6 +1017,101 @@ namespace Test.Audio
             Console.WriteLine($"\nWrote {outputPath}");
         }
 
+        /// <summary>
+        /// A testing .bnk holding nothing but vanilla's two containers, with Cathay's branches taken
+        /// out, to answer one question on its own: does a testing .bnk override the vanilla .bnk it
+        /// is named after?
+        ///
+        /// The previous pack conflated two causes. Hearing Cathay's usual music through it could mean
+        /// the override never happens, or it could mean the override happens and Wwise rejects the
+        /// .bnk over something in the mod's own hircs and falls back to vanilla. Both look identical
+        /// from the sofa, so this removes every generated hirc from the .bnk and edits nothing but
+        /// vanilla's decision trees.
+        ///
+        /// Cathay going silent means a testing .bnk does override vanilla, and the fault is in what
+        /// the mod puts inside one. Cathay still playing means the override itself never happens, and
+        /// the whole testing .bnk scheme does not work for music.
+        ///
+        /// The campaign container's default branch goes too. Removing only Cathay's would drop it
+        /// through to the default and play something, which is not distinguishable by ear from the
+        /// override having failed.
+        /// </summary>
+        [Test]
+        public void BuildAPackThatSilencesCathayWithVanillaContentOnly()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            var testingBank = modPack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music_1_music_araby_for_testing.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var bnk = BnkFile.CreateFromBytes(testingBank.Value.DataSource.ReadData(), testingBank.Key, false);
+
+            // Vanilla's containers alone. Every generated hirc is dropped so that nothing the editor
+            // produces can be blamed for the .bnk failing to load.
+            var containers = bnk.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().Cast<HircItem>().ToList();
+            Console.WriteLine($"keeping {containers.Count} container(s), dropping {bnk.HircChunk.HircItems.Count - containers.Count} generated hirc(s)");
+
+            foreach (var container in containers.Cast<CAkMusicSwitchCntr_V136>())
+            {
+                var removed = RemoveBranches(container.AkDecisionTree.DecisionTree,
+                    [WwiseHash.Compute("cathay"), WwiseHash.Compute("araby"), DefaultKey]);
+
+                // The child list is rebuilt from what the tree still names, so it stays consistent
+                // with the trimmed tree rather than keeping ids nothing points at any more.
+                var leaves = new List<uint>();
+                CollectLeaves(container.AkDecisionTree.DecisionTree, leaves);
+                var childIds = new SortedSet<uint>(leaves.Where(id => id != 0));
+
+                container.MusicTransNodeParams.MusicNodeParams.Children = new Children_V136
+                {
+                    NumChilds = (uint)childIds.Count,
+                    ChildIds = [.. childIds]
+                };
+
+                container.AkDecisionTree.Nodes = AkDecisionTree_V136.FlattenDecisionTree(container.AkDecisionTree.DecisionTree);
+                container.TreeDataSize = container.AkDecisionTree.GetSize();
+                container.UpdateSectionSize();
+
+                Console.WriteLine($"  container {container.Id}: removed {removed} branch(es), " +
+                    $"{container.AkDecisionTree.DecisionTree.Nodes.Count} top level keys left, {childIds.Count} children");
+            }
+
+            var bkhdChunkBytes = Shared.GameFormats.Wwise.Bkhd.BkhdChunk.WriteData(bnk.BkhdChunk);
+            var hircChunkBytes = HircChunk.WriteData(
+                Editors.Audio.Shared.Wwise.Generators.Hirc.HircChunkGenerator.GenerateHircChunk(containers),
+                bnk.BkhdChunk.AkBankHeader.BankGeneratorVersion);
+
+            using var memStream = new MemoryStream();
+            memStream.Write(bkhdChunkBytes);
+            memStream.Write(hircChunkBytes);
+            var rebuilt = memStream.ToArray();
+
+            var reparsed = BnkFile.CreateFromBytes(rebuilt, testingBank.Key, false);
+            Assert.That(reparsed.HircChunk.HircItems, Has.Count.EqualTo(containers.Count));
+
+            testingBank.Value.DataSource = new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt);
+
+            modPack.IsReadOnly = false;
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_cathay_silenced.pack");
+            provider.GetRequiredService<IPackFileService>().SavePackContainer(modPack, outputPath, false,
+                Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
+
+            Console.WriteLine($"\nWrote {outputPath}");
+        }
+
+        /// <summary>Drops every branch keyed on one of the given keys, at whatever depth it sits.</summary>
+        static int RemoveBranches(AkDecisionTree_V136.Node_V136 node, uint[] keys)
+        {
+            var removed = node.Nodes.RemoveAll(child => keys.Contains(child.Key));
+            foreach (var child in node.Nodes)
+                removed += RemoveBranches(child, keys);
+
+            return removed;
+        }
+
+        const uint DefaultKey = 0;
+
         static void CollectLeavesFor(AkDecisionTree_V136.Node_V136 node, uint key, List<AkDecisionTree_V136.Node_V136> found, bool matched = false)
         {
             foreach (var child in node.Nodes)
