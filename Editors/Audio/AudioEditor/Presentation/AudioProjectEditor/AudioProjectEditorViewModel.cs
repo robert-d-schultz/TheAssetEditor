@@ -322,13 +322,14 @@ namespace Editors.Audio.AudioEditor.Presentation.AudioProjectEditor
         private bool AreAudioFilesSet()
         {
             var selectedAudioProjectExplorerNode = _audioEditorStateService.SelectedAudioProjectExplorerNode;
-            if (!selectedAudioProjectExplorerNode.IsStateGroup())
-            {
-                if (_audioEditorStateService.AudioFiles.Count == 0)
-                    return false;
-            }
 
-            return true;
+            // A music Action Event sets a State rather than playing a Sound, so like a State Group
+            // it has no audio of its own to wait for - requiring one here would leave the Add
+            // button permanently disabled.
+            if (selectedAudioProjectExplorerNode.IsStateGroup() || selectedAudioProjectExplorerNode.IsMusicActionEvent())
+                return true;
+
+            return _audioEditorStateService.AudioFiles.Count != 0;
         }
 
         private bool DoesRowExist()

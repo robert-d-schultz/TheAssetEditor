@@ -6,6 +6,7 @@ using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Editors.Audio.AudioExplorer;
+using Editors.Audio.Shared.AudioProject;
 using Editors.MusicDatEditor.Views;
 using Shared.Core.PackFiles;
 using Shared.Core.PackFiles.Models;
@@ -32,11 +33,16 @@ namespace Editors.MusicDatEditor.ViewModels
     {
         const string RestrictedToFolder = @"audio\scripts";
 
+        // Where the Audio Editor's own New Audio Project dialog defaults to, so a project made
+        // here turns up in the same place a modder would have put one by hand.
+        const string AudioProjectFolder = @"audio\audio_projects";
+
         readonly ILogger _logger = Logging.Create<MusicDatEditorViewModel>();
         readonly IPackFileService _packFileService;
         readonly IFileSaveService _fileSaveService;
         readonly IStandardDialogs _dialogs;
         readonly IEditorManager _editorManager;
+        readonly IMusicAudioProjectService _musicAudioProjectService;
 
         MusicDatFile? _file;
         IReadOnlyDictionary<int, string> _functionNamesByOffset = new Dictionary<int, string>();
@@ -81,12 +87,13 @@ namespace Editors.MusicDatEditor.ViewModels
         public ICommand AddCultureCommand { get; }
 
         public MusicDatEditorViewModel(IPackFileService packFileService, IFileSaveService fileSaveService,
-            IStandardDialogs dialogs, IEditorManager editorManager)
+            IStandardDialogs dialogs, IEditorManager editorManager, IMusicAudioProjectService musicAudioProjectService)
         {
             _packFileService = packFileService;
             _fileSaveService = fileSaveService;
             _dialogs = dialogs;
             _editorManager = editorManager;
+            _musicAudioProjectService = musicAudioProjectService;
             OpenCommand = new RelayCommand(Open);
             SaveCommand = new RelayCommand(() => Save());
             FindInAudioExplorerCommand = new RelayCommand<SymbolListItemViewModel>(FindInAudioExplorer);
@@ -148,7 +155,12 @@ namespace Editors.MusicDatEditor.ViewModels
                 return;
             }
 
-            var (battle, campaign) = AddCultureWizardWindow.ShowDialog(Application.Current?.MainWindow, battleFile, campaignFile);
+            var wizard = AddCultureWizardWindow.ShowDialog(Application.Current?.MainWindow, battleFile, campaignFile);
+            if (wizard == null)
+                return;
+
+            var battle = wizard.EditedBattle;
+            var campaign = wizard.EditedCampaign;
             if (battle == null && campaign == null)
                 return;
 
@@ -158,7 +170,51 @@ namespace Editors.MusicDatEditor.ViewModels
             if (campaign != null)
                 parts.Add(Commit(campaignPackFile!, campaign));
 
+            if (wizard.CreateAudioProject)
+                parts.Add(CreateAudioProject(wizard));
+
             StatusText = "Added a culture - " + string.Join("; ", parts);
+        }
+
+        /// <summary>Generates the audio project holding the events the splice now posts. Run
+        /// after the scripts are committed, and reported rather than thrown: the wiring is the
+        /// part that had to be all-or-nothing, and it has already succeeded by this point, so
+        /// failing to produce the Wwise-side companion is a setback to describe, not a reason
+        /// to leave the modder thinking the whole thing came apart.</summary>
+        string CreateAudioProject(AddCultureWizardViewModel wizard)
+        {
+            var events = wizard.EventsNeedingAudio;
+            if (events.Count == 0)
+                return "no audio project needed (every slot borrows existing audio)";
+
+            try
+            {
+                var result = _musicAudioProjectService.CreateForMusicEvents(
+                    wizard.AudioProjectName, AudioProjectFolder, events);
+
+                var summary = $"wrote {result.FilePath} with {result.CreatedEvents.Count} music event(s)";
+                if (result.SkippedEvents.Count == 0)
+                    return summary;
+
+                // Nearly always a name that already exists in vanilla, which means the culture
+                // is reusing a shipped event rather than getting its own - worth saying out
+                // loud, since the script will still post it and it will still play something.
+                _dialogs.ShowDialogBox(
+                    "The music scripts were wired up, but these events could not be added to the audio project:\n\n  " +
+                    string.Join("\n  ", result.SkippedEvents.Select(x => $"{x.EventName} - {x.Reason}")),
+                    "Add Culture");
+                return summary + $", {result.SkippedEvents.Count} skipped";
+            }
+            catch (Exception e)
+            {
+                _logger.Here().Error($"Could not create the audio project: {e.Message}");
+                _dialogs.ShowDialogBox(
+                    "The music scripts were wired up successfully, but the audio project could not be created:\n\n" +
+                    e.Message +
+                    "\n\nThe events the scripts now post still need to exist in a sound bank for anything to play.",
+                    "Add Culture");
+                return "audio project failed";
+            }
         }
 
         /// <summary>Locates both halves of the pair by name across the loaded packs, and

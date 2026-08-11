@@ -106,7 +106,7 @@ namespace Editors.Audio.Shared.AudioProject.Factories
             var actionEventId = IdGenerator.GenerateActionEventId(usedHircIds, actionEventName);
             var actionIds = IdGenerator.GenerateIds(usedHircIds);
 
-            var setStateAction = Action.CreateSetState(actionIds.Id, WwiseHash.Compute(stateGroupName), WwiseHash.Compute(stateName));
+            var setStateAction = Action.CreateSetState(actionIds.Id, stateGroupName, stateName);
             var actions = new List<Action> { setStateAction };
 
             var actionEvent = new ActionEvent(actionEventId, actionEventName, actions, actionEventType);

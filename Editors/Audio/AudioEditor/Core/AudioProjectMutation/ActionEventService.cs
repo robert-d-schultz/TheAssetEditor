@@ -15,6 +15,7 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
     public interface IActionEventService
     {
         void AddPlayActionEvent(string actionEventTypeName, string actionEventName, List<AudioFile> audioFiles, HircSettings hircSettings);
+        void AddSetStateActionEvent(string actionEventTypeName, string actionEventName, string stateGroupName, string stateName);
         void AddPauseResumeStopActionEvent(string actionEventTypeName, string actionEventName);
         void RemoveActionEvent(string actionEventNodeName, string actionEventName);
     }
@@ -75,6 +76,47 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                         audioFile.Sounds.Add(sound.Id);
                 }
             }
+        }
+
+        /// <summary>
+        /// A music Action Event, which sets a State instead of playing a Sound. There are no target
+        /// objects to register - no Sound, no container, no audio file - so unlike the Play case
+        /// this only has to add the Event itself, and the State it points at is added to the
+        /// project's State Group so it shows up in the Audio Explorer.
+        /// </summary>
+        public void AddSetStateActionEvent(string actionEventTypeName, string actionEventName, string stateGroupName, string stateName)
+        {
+            var usedHircIds = IdGenerator.GetUsedHircIds(_audioRepository, _audioEditorStateService.AudioProject);
+
+            var gameSoundBankName = Wh3SoundBankInformation.GetName(Wh3ActionEventInformation.GetSoundBank(actionEventTypeName));
+            var audioProjectNameWithoutExtension = Path.GetFileNameWithoutExtension(_audioEditorStateService.AudioProjectFileName);
+            var soundBankName = $"{gameSoundBankName}_{audioProjectNameWithoutExtension}";
+            var soundBank = _audioEditorStateService.AudioProject.GetSoundBank(soundBankName);
+
+            var actionEventType = Wh3ActionEventInformation.GetActionEventType(actionEventTypeName);
+            var result = _actionEventFactory.CreateSetStateActionEvent(usedHircIds, actionEventType, actionEventName, stateGroupName, stateName);
+            soundBank.ActionEvents.InsertAlphabetically(result.ActionEvent);
+
+            AddStateToStateGroup(stateGroupName, stateName);
+        }
+
+        private void AddStateToStateGroup(string stateGroupName, string stateName)
+        {
+            var stateGroup = _audioEditorStateService.AudioProject.StateGroups
+                .FirstOrDefault(stateGroup => stateGroup.Name == stateGroupName);
+
+            if (stateGroup == null)
+                return;
+
+            if (stateGroup.States.Any(state => state.Name == stateName))
+                return;
+
+            // Vanilla States are already known to the game, so re-adding one would only produce a
+            // duplicate in the project's own list.
+            if (_audioRepository.StatesByStateGroup.TryGetValue(stateGroupName, out var vanillaStates) && vanillaStates.Contains(stateName))
+                return;
+
+            stateGroup.States.InsertAlphabetically(new State(stateName));
         }
 
         public void AddPauseResumeStopActionEvent(string actionEventTypeName, string actionEventName)

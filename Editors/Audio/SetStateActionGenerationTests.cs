@@ -73,10 +73,7 @@ namespace Test.Audio
 
         static CAkAction_V136 GenerateSetStateAction()
         {
-            var action = Action.CreateSetState(
-                id: 12345,
-                stateGroupId: WwiseHash.Compute(StateGroupName),
-                stateId: WwiseHash.Compute(StateName));
+            var action = Action.CreateSetState(id: 12345, StateGroupName, StateName);
 
             // Global music is the sound bank the music events live in, and is also the one case
             // that adds a transition-time property - SetState actions have to stay clear of it.

@@ -1,4 +1,5 @@
-﻿using Shared.GameFormats.Wwise.Enums;
+﻿using Shared.GameFormats.Wwise;
+using Shared.GameFormats.Wwise.Enums;
 
 namespace Editors.Audio.Shared.AudioProject.Models
 {
@@ -13,6 +14,11 @@ namespace Editors.Audio.Shared.AudioProject.Models
         /// <summary>Only meaningful for SetState actions, where it names the State Group the
         /// target State belongs to.</summary>
         public uint StateGroupId { get; set; }
+
+        /// <summary>The names the SetState ids were hashed from, kept so the editor can show what
+        /// the action does without having to reverse a Wwise hash.</summary>
+        public string StateGroupName { get; set; }
+        public string StateName { get; set; }
 
         public Action(uint id, AkBkHircType targetHircType, AkActionType actionType, uint idExt, uint bankId)
         {
@@ -36,11 +42,13 @@ namespace Editors.Audio.Shared.AudioProject.Models
         /// goes in IdExt as well as in the state params, which is what every vanilla music action
         /// does.
         /// </summary>
-        public static Action CreateSetState(uint id, uint stateGroupId, uint stateId)
+        public static Action CreateSetState(uint id, string stateGroupName, string stateName)
         {
-            return new Action(id, AkBkHircType.State, AkActionType.SetState, stateId, bankId: 0)
+            return new Action(id, AkBkHircType.State, AkActionType.SetState, WwiseHash.Compute(stateName), bankId: 0)
             {
-                StateGroupId = stateGroupId
+                StateGroupId = WwiseHash.Compute(stateGroupName),
+                StateGroupName = stateGroupName,
+                StateName = stateName
             };
         }
 

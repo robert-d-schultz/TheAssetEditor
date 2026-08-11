@@ -31,6 +31,7 @@ namespace Editors.MusicDatEditor.ViewModels
         [ObservableProperty] string _audioState = "";
         [ObservableProperty] string _subcultureKey = "";
         [ObservableProperty] string _error = "";
+        [ObservableProperty] bool _createAudioProject = true;
 
         readonly DispatcherTimer _previewDebounce = new() { Interval = TimeSpan.FromMilliseconds(300) };
 
@@ -70,6 +71,23 @@ namespace Editors.MusicDatEditor.ViewModels
             "played against (a different mix when fighting a particular enemy, say), that has to be " +
             "authored as a Switch Container inside Wwise itself; this wizard has no way to see or " +
             "express that kind of variation.";
+
+        /// <summary>The events the splice will post that do not exist yet, in the order the
+        /// rows are shown. A borrowing row contributes nothing: its arm is a clone of an
+        /// existing culture's, so it posts that culture's event, which already exists.</summary>
+        public IReadOnlyList<string> EventsNeedingAudio =>
+            Slots.Where(s => s is { Include: true, UseExistingAudio: false })
+                 .Select(s => s.Slot.EventFor(MusicalCulture))
+                 .ToList();
+
+        /// <summary>Name for the generated audio project, and so for the SoundBank compiled out
+        /// of it - kept distinct per culture so two runs of this wizard do not collide.</summary>
+        public string AudioProjectName => $"music_{MusicalCulture}";
+
+        public string AudioProjectHelp =>
+            "Creates an audio project holding one Music event per row above, built the way vanilla " +
+            "builds them: each event sets a Wwise State naming this culture, rather than playing a " +
+            "file directly. Open it in the Audio Editor to compile it, or to add more events by hand.";
 
         public string MissingFileWarning =>
             _battle == null ? "battle_music.dat could not be found in this pack, so only the campaign wiring will be added." :
