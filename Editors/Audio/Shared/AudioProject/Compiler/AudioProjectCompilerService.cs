@@ -68,12 +68,17 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
             foreach (var soundBank in audioProject.SoundBanks)
             {
                 soundBank.FileName = $"{soundBank.Name}.bnk";
+                soundBank.AudioProjectName = audioProjectNameWithoutExtension;
                 if (soundBank.Language == Wh3LanguageInformation.GetLanguageAsString(Wh3Language.Sfx))
                     soundBank.FilePath = $"audio\\wwise\\{soundBank.FileName}";
                 else
                     soundBank.FilePath = $"audio\\wwise\\{soundBank.Language}\\{soundBank.FileName}";
 
-                if (soundBank.DialogueEvents.Count != 0)
+                // Both Dialogue Events and music re-emit hircs that already exist in vanilla, so both
+                // need somewhere to put them other than the .bnk the modder keeps. Music names its
+                // testing .bnks after the vanilla .bnks it overrides rather than after this one, so
+                // only the merging name is shared.
+                if (soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0)
                 {
                     // In WH3 .bnk files are loaded in descending name order. When a .bnk is loaded it overrides hircs with the same ID in .bnks loaded
                     // before it so the .bnk with the lowest alphanumeric name takes priority.
@@ -265,20 +270,31 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
         {
             foreach (var soundBank in audioProject.SoundBanks)
             {
-                if (soundBank.ActionEvents.Count != 0 || soundBank.DialogueEvents.Count != 0)
+                if (soundBank.ActionEvents.Count != 0 || soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0)
                 {
                     _logger.Here().Information($"Generating SoundBank {soundBank.FilePath}");
 
                     // Create the .bnk that modders should keep
-                    _soundBankGeneratorService.GenerateSoundBankWithoutDialogueEvents(soundBank);
+                    _soundBankGeneratorService.GenerateSoundBankWithoutMergedHircs(soundBank);
 
                     if (soundBank.DialogueEvents.Count != 0)
                     {
                         // Create a .bnk of the compiled Dialogue Events merged with vanilla Dialogue Events for modders to test
-                        _logger.Here().Information($"Generating SoundBank {soundBank.TestingFilePath} and {soundBank.MergingFilePath}");
+                        _logger.Here().Information($"Generating SoundBank {soundBank.TestingFilePath}");
                         _soundBankGeneratorService.GenerateDialogueEventsForTestingSoundBank(soundBank);
+                    }
 
+                    if (soundBank.MusicRandomSequences.Count != 0)
+                    {
+                        // The same for music: the mod's branches merged into the vanilla Music Switch
+                        // containers, in .bnks named to override the vanilla ones they came from
+                        _soundBankGeneratorService.GenerateMusicSwitchContainersForTestingSoundBanks(soundBank);
+                    }
+
+                    if (soundBank.DialogueEvents.Count != 0 || soundBank.MusicRandomSequences.Count != 0)
+                    {
                         // Create the .bnk that modders should give to the merger
+                        _logger.Here().Information($"Generating SoundBank {soundBank.MergingFilePath}");
                         _soundBankGeneratorService.GenerateMergingSoundBank(soundBank);
                     }
                 }

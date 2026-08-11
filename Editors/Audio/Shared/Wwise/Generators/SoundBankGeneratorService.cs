@@ -22,8 +22,9 @@ namespace Editors.Audio.Shared.Wwise.Generators
 {
     public interface ISoundBankGeneratorService
     {
-        void GenerateSoundBankWithoutDialogueEvents(SoundBank soundBank);
+        void GenerateSoundBankWithoutMergedHircs(SoundBank soundBank);
         void GenerateDialogueEventsForTestingSoundBank(SoundBank soundBank);
+        void GenerateMusicSwitchContainersForTestingSoundBanks(SoundBank soundBank);
         void GenerateMergingSoundBank(SoundBank soundBank);
         void GenerateMergedDialogueEventSoundBanks(List<string> moddedSoundBanks, string soundBankSuffix);
     }
@@ -56,7 +57,13 @@ namespace Editors.Audio.Shared.Wwise.Generators
             _hircGeneratorServiceFactory = HircGeneratorServiceFactory.CreateFactory(bankGeneratorVersion);
         }
 
-        public void GenerateSoundBankWithoutDialogueEvents(SoundBank soundBank)
+        /// <summary>
+        /// The .bnk the modder keeps. It leaves out everything that shares an id with vanilla -
+        /// Dialogue Events and Music Switch containers - because those cannot simply be shipped
+        /// alongside vanilla, they have to be merged into it. They live in the testing and merging
+        /// .bnks instead.
+        /// </summary>
+        public void GenerateSoundBankWithoutMergedHircs(SoundBank soundBank)
         {
             var actionEventToHircLookup = new Dictionary<ActionEvent, HircItem>();
             var hircItems = new List<HircItem>();
@@ -85,21 +92,18 @@ namespace Editors.Audio.Shared.Wwise.Generators
             // Appended after sorting rather than run through it. SortHircs orders Play targets and
             // Events, and music is neither - it is reached through the decision tree, so it has its
             // own ordering: tracks before their segments, segments before the sequence over them.
-            hircItems.AddRange(GenerateMusicHircs(soundBank));
+            hircItems.AddRange(GenerateMusicHierarchyHircs(soundBank));
 
             WriteSoundBank(soundBank.Id, soundBank.LanguageId, soundBank.FileName, soundBank.FilePath, hircItems);
         }
 
         /// <summary>
-        /// The music hierarchy this bank contributes, plus the vanilla Music Switch containers
-        /// re-emitted with the mod's branches merged in. Nothing here is reached by a Play action -
-        /// an Action Event sets a State and the merged decision tree turns that into audio.
+        /// The music hierarchy this bank contributes. These are all new ids so they can ship as they
+        /// are - it is only the Music Switch container above them that clashes with vanilla.
         /// </summary>
-        private List<HircItem> GenerateMusicHircs(SoundBank soundBank)
+        private List<HircItem> GenerateMusicHierarchyHircs(SoundBank soundBank)
         {
             var hircItems = new List<HircItem>();
-            if (soundBank.MusicRandomSequences.Count == 0)
-                return hircItems;
 
             foreach (var musicRandomSequence in soundBank.MusicRandomSequences)
             {
@@ -112,15 +116,15 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 hircItems.Add(_hircGeneratorServiceFactory.GenerateHirc(musicRandomSequence));
             }
 
-            hircItems.AddRange(GenerateMergedMusicSwitchContainers(soundBank));
             return hircItems;
         }
 
-        private List<HircItem> GenerateMergedMusicSwitchContainers(SoundBank soundBank)
+        /// <summary>
+        /// The branches the mod adds, grouped by the vanilla Music Switch container they belong in.
+        /// One container per State Group.
+        /// </summary>
+        private static Dictionary<uint, List<MusicBranch>> GetMusicBranchesByContainerId(SoundBank soundBank)
         {
-            var hircItems = new List<HircItem>();
-
-            // One container per State Group, carrying every branch the mod adds to it.
             var branchesByContainerId = new Dictionary<uint, List<MusicBranch>>();
 
             foreach (var musicRandomSequence in soundBank.MusicRandomSequences)
@@ -132,21 +136,98 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 branches.Add(new MusicBranch(musicRandomSequence.StateName, musicRandomSequence.Id));
             }
 
-            foreach (var (containerId, branches) in branchesByContainerId)
+            return branchesByContainerId;
+        }
+
+        private CAkMusicSwitchCntr_V136 GetVanillaMusicSwitchContainer(uint containerId)
+        {
+            var vanillaContainer = _audioRepository.GetHircs(AkBkHircType.Music_Switch)
+                .FirstOrDefault(hircItem => hircItem.Id == containerId && hircItem.IsCA) as CAkMusicSwitchCntr_V136;
+
+            if (vanillaContainer == null)
+                _logger.Here().Error($"Music Switch container {containerId} was not found in the vanilla data, so its branches cannot be merged");
+
+            return vanillaContainer;
+        }
+
+        /// <summary>
+        /// One .bnk per vanilla .bnk the mod merges into, holding that .bnk's Music Switch containers
+        /// with vanilla merged into the mod's branches so a modder can play the project on its own.
+        ///
+        /// A single project can touch containers from more than one vanilla .bnk - campaign music and
+        /// battle music are separate - and each testing .bnk has to be named after the .bnk it is
+        /// overriding to win the load order, so they are grouped by that rather than written as one.
+        /// </summary>
+        public void GenerateMusicSwitchContainersForTestingSoundBanks(SoundBank soundBank)
+        {
+            var containersByVanillaSoundBankName = new Dictionary<string, List<HircItem>>();
+
+            foreach (var (containerId, branches) in GetMusicBranchesByContainerId(soundBank))
             {
-                var vanillaContainer = _audioRepository.GetHircs(AkBkHircType.Music_Switch)
-                    .FirstOrDefault(hircItem => hircItem.Id == containerId && hircItem.IsCA) as CAkMusicSwitchCntr_V136;
-
+                var vanillaContainer = GetVanillaMusicSwitchContainer(containerId);
                 if (vanillaContainer == null)
-                {
-                    _logger.Here().Error($"Music Switch container {containerId} was not found in the vanilla data, so its branches cannot be merged");
                     continue;
-                }
 
-                hircItems.Add(_musicSwitchContainerMergeService.MergeBranches(vanillaContainer, branches));
+                var soundBankNameBase = GetSoundBankNameBase(vanillaContainer.BnkFilePath);
+                if (!containersByVanillaSoundBankName.TryGetValue(soundBankNameBase, out var containers))
+                    containersByVanillaSoundBankName[soundBankNameBase] = containers = [];
+
+                containers.Add(_musicSwitchContainerMergeService.MergeBranches(vanillaContainer, branches));
+            }
+
+            foreach (var (soundBankNameBase, containers) in containersByVanillaSoundBankName)
+            {
+                // The same naming the Dialogue Event testing .bnk uses, for the same reason: '_1_'
+                // sorts ahead of the vanilla '__core', which puts it last in the load order and so
+                // lets it override.
+                var fileName = $"{soundBankNameBase}_1_{soundBank.AudioProjectName}_for_testing.bnk";
+                var filePath = GetSoundBankFilePath(fileName, soundBank.Language);
+                var id = WwiseHash.Compute(Path.GetFileNameWithoutExtension(fileName));
+
+                _logger.Here().Information($"Generating SoundBank {filePath}");
+                WriteSoundBank(id, soundBank.LanguageId, fileName, filePath, containers);
+            }
+        }
+
+        /// <summary>
+        /// The Music Switch containers carrying only the mod's own branches, for the merging .bnk.
+        /// Vanilla is deliberately left out: the merger folds it in once, after it has combined the
+        /// branches from every mod it was given.
+        /// </summary>
+        private List<HircItem> GenerateModdedMusicSwitchContainers(SoundBank soundBank)
+        {
+            var hircItems = new List<HircItem>();
+
+            foreach (var (containerId, branches) in GetMusicBranchesByContainerId(soundBank))
+            {
+                var vanillaContainer = GetVanillaMusicSwitchContainer(containerId);
+                if (vanillaContainer == null)
+                    continue;
+
+                hircItems.Add(_musicSwitchContainerMergeService.CreateModdedContainer(vanillaContainer, branches));
             }
 
             return hircItems;
+        }
+
+        /// <summary>
+        /// The name a modded .bnk has to be built on to override the vanilla one, taken from the
+        /// vanilla .bnk the hirc was read out of. Vanilla names its .bnks '{base}__core', so the base
+        /// is what comes before the double underscore.
+        /// </summary>
+        private static string GetSoundBankNameBase(string bnkFilePath)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(bnkFilePath);
+            var separatorIndex = fileName.IndexOf("__");
+            return separatorIndex == -1 ? fileName : fileName[..separatorIndex];
+        }
+
+        private static string GetSoundBankFilePath(string fileName, string language)
+        {
+            if (language == Wh3LanguageInformation.GetLanguageAsString(Wh3Language.Sfx))
+                return $"audio\\wwise\\{fileName}";
+
+            return $"audio\\wwise\\{language}\\{fileName}";
         }
 
         public void GenerateDialogueEventsForTestingSoundBank(SoundBank soundBank)
@@ -213,6 +294,11 @@ namespace Editors.Audio.Shared.Wwise.Generators
             }
 
             SortHircs(hircItems);
+
+            // Same ordering exception as the modder's .bnk. The containers go in carrying the mod's
+            // branches alone so the merger can combine several mods before folding vanilla in.
+            hircItems.AddRange(GenerateMusicHierarchyHircs(soundBank));
+            hircItems.AddRange(GenerateModdedMusicSwitchContainers(soundBank));
 
             WriteSoundBank(soundBank.MergingId, soundBank.LanguageId, soundBank.MergingFileName, soundBank.MergingFilePath, hircItems);
         }

@@ -19,6 +19,13 @@ namespace Editors.Audio.Shared.AudioProject.Models
         [JsonIgnore] public uint MergingId { get; set; }
         [JsonIgnore] public string MergingFileName { get; set; }
         [JsonIgnore] public string MergingFilePath { get; set; }
+
+        /// <summary>
+        /// The audio project this bank was compiled from, without its extension. Testing .bnks are
+        /// named after the vanilla .bnk they override rather than after this bank, so they need the
+        /// project name separately to stay distinguishable between mods.
+        /// </summary>
+        [JsonIgnore] public string AudioProjectName { get; set; }
         public Wh3SoundBank GameSoundBank { get; set; }
         public List<DialogueEvent> DialogueEvents { get; set; } = [];
         public List<ActionEvent> ActionEvents { get; set; } = [];
@@ -53,13 +60,20 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 .Where(actionEvent => actionEvent.Actions.Count != 0)
                 .ToList();
 
-            if (cleanedDialogueEvents.Count == 0 && cleanedActionEvents.Count == 0)
+            // A branch with no segments has nothing to play, so it is dropped the same way an empty
+            // Action Event is.
+            var cleanedMusicRandomSequences = MusicRandomSequences
+                .Where(musicRandomSequence => musicRandomSequence.Segments.Count != 0)
+                .ToList();
+
+            if (cleanedDialogueEvents.Count == 0 && cleanedActionEvents.Count == 0 && cleanedMusicRandomSequences.Count == 0)
                 return null;
 
             return new SoundBank(Name, GameSoundBank, Language)
             {
                 FileName = FileName,
                 FilePath = FilePath,
+                AudioProjectName = AudioProjectName,
                 TestingId = TestingId,
                 TestingFileName = TestingFileName,
                 TestingFilePath = TestingFilePath,
@@ -70,7 +84,7 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 ActionEvents = cleanedActionEvents,
                 Sounds = Sounds.ToList(),
                 RandomSequenceContainers = RandomSequenceContainers.ToList(),
-                MusicRandomSequences = MusicRandomSequences.ToList(),
+                MusicRandomSequences = cleanedMusicRandomSequences,
                 MusicSegments = MusicSegments.ToList()
             };
         }

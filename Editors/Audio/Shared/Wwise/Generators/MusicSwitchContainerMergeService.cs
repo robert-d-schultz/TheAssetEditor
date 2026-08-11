@@ -13,20 +13,27 @@ namespace Editors.Audio.Shared.Wwise.Generators
 
     public interface IMusicSwitchContainerMergeService
     {
+        CAkMusicSwitchCntr_V136 CreateModdedContainer(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches);
         CAkMusicSwitchCntr_V136 MergeBranches(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches);
     }
 
     /// <summary>
-    /// Adds a mod's branches to a vanilla Music Switch container's decision tree and re-emits the
-    /// whole container, the same way <see cref="SoundBankGeneratorService"/> re-emits a whole
-    /// Dialogue Event rather than trying to patch one in place.
+    /// Re-emits a vanilla Music Switch container carrying a mod's branches, the same way
+    /// <see cref="SoundBankGeneratorService"/> re-emits a whole Dialogue Event rather than trying to
+    /// patch one in place.
     ///
     /// A music Action Event only sets a State. Nothing plays until that State selects a branch here,
     /// so this is what turns a generated music hierarchy into audio the game will actually reach.
+    ///
+    /// Two forms, because the Dialogue Event path needs both and music needs them for the same
+    /// reasons: <see cref="CreateModdedContainer"/> carries the mod's branches alone and goes in the
+    /// merging .bnk, so several mods can be combined before vanilla is folded in;
+    /// <see cref="MergeBranches"/> folds vanilla in immediately and goes in the testing .bnk, so one
+    /// mod can be played on its own.
     /// </summary>
     public class MusicSwitchContainerMergeService : IMusicSwitchContainerMergeService
     {
-        public CAkMusicSwitchCntr_V136 MergeBranches(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches)
+        public CAkMusicSwitchCntr_V136 CreateModdedContainer(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches)
         {
             ArgumentNullException.ThrowIfNull(vanillaContainer);
             ArgumentNullException.ThrowIfNull(branches);
@@ -40,21 +47,37 @@ namespace Editors.Audio.Shared.Wwise.Generators
                     $"Music Switch container {vanillaContainer.Id} branches on {vanillaContainer.TreeDepth} arguments. " +
                     "Only containers with a single argument can be merged into.");
 
-            var vanillaDecisionTree = vanillaContainer.AkDecisionTree.DecisionTree;
-
             var moddedRoot = new AkDecisionTree_V136.Node_V136
             {
                 Nodes = [.. branches.Select(CreateBranchNode)]
             };
 
+            return CopyWithDecisionTree(vanillaContainer, moddedRoot);
+        }
+
+        public CAkMusicSwitchCntr_V136 MergeBranches(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches)
+        {
+            var moddedContainer = CreateModdedContainer(vanillaContainer, branches);
+
             // The modded tree is the base so that a branch for a State vanilla already covers
             // replaces it, which is what a modder replacing a culture's music is asking for.
-            var mergedTree = AkDecisionTree_V136.MergeDecisionTrees(moddedRoot, vanillaDecisionTree);
+            var mergedTree = AkDecisionTree_V136.MergeDecisionTrees(
+                moddedContainer.AkDecisionTree.DecisionTree,
+                vanillaContainer.AkDecisionTree.DecisionTree);
 
-            // A new container rather than the one passed in. The vanilla hirc belongs to the audio
-            // repository and is shared with everything else reading vanilla data, so merging must
-            // not edit it in place.
-            var mergedContainer = new CAkMusicSwitchCntr_V136
+            return CopyWithDecisionTree(vanillaContainer, mergedTree);
+        }
+
+        /// <summary>
+        /// A new container rather than the one passed in. The vanilla hirc belongs to the audio
+        /// repository and is shared with everything else reading vanilla data, so this must not edit
+        /// it in place. Everything outside the decision tree is carried over unchanged - the
+        /// arguments, the mode and the transition parameters are what make the container the one the
+        /// game is already asking for.
+        /// </summary>
+        private static CAkMusicSwitchCntr_V136 CopyWithDecisionTree(CAkMusicSwitchCntr_V136 vanillaContainer, AkDecisionTree_V136.Node_V136 decisionTree)
+        {
+            var container = new CAkMusicSwitchCntr_V136
             {
                 Id = vanillaContainer.Id,
                 HircType = vanillaContainer.HircType,
@@ -62,18 +85,17 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 IsContinuePlayback = vanillaContainer.IsContinuePlayback,
                 TreeDepth = vanillaContainer.TreeDepth,
                 Arguments = [.. vanillaContainer.Arguments],
-                Mode = vanillaContainer.Mode
+                Mode = vanillaContainer.Mode,
+                AkDecisionTree = new AkDecisionTree_V136
+                {
+                    DecisionTree = decisionTree,
+                    Nodes = AkDecisionTree_V136.FlattenDecisionTree(decisionTree)
+                }
             };
 
-            mergedContainer.AkDecisionTree = new AkDecisionTree_V136
-            {
-                DecisionTree = mergedTree,
-                Nodes = AkDecisionTree_V136.FlattenDecisionTree(mergedTree)
-            };
-            mergedContainer.TreeDataSize = mergedContainer.AkDecisionTree.GetSize();
-            mergedContainer.UpdateSectionSize();
-
-            return mergedContainer;
+            container.TreeDataSize = container.AkDecisionTree.GetSize();
+            container.UpdateSectionSize();
+            return container;
         }
 
         private static AkDecisionTree_V136.Node_V136 CreateBranchNode(MusicBranch branch)

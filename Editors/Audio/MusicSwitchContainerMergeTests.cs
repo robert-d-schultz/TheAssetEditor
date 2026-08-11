@@ -94,6 +94,42 @@ namespace Test.Audio
         }
 
         [Test]
+        public void TheContainerForTheMergingSoundBankCarriesOnlyTheModsBranches()
+        {
+            // The merging .bnk is combined with other mods' before vanilla is folded in, so carrying
+            // vanilla here would make every mod look like it had deliberately set the same branches
+            // and the merger could not tell which mod actually claimed a culture.
+            var modded = new MusicSwitchContainerMergeService()
+                .CreateModdedContainer(CreateVanillaContainer(), [new MusicBranch("Araby", NewRanSeqId)]);
+
+            var branch = modded.AkDecisionTree.DecisionTree.Nodes.Single();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(branch.Key, Is.EqualTo(WwiseHash.Compute("Araby")));
+                Assert.That(branch.AudioNodeId, Is.EqualTo(NewRanSeqId));
+
+                // Everything outside the tree still has to be vanilla's, or the game is being handed
+                // a container it never asked for.
+                Assert.That(modded.Id, Is.EqualTo(SwitchContainerId));
+                Assert.That(modded.Arguments.Single().GroupId, Is.EqualTo(WwiseHash.Compute("WH3_Campaign_Subcultures")));
+            });
+        }
+
+        [Test]
+        public void MergingDoesNotEditTheVanillaContainer()
+        {
+            // The vanilla hirc comes from the audio repository and is shared with everything else
+            // reading vanilla data, so compiling twice must not merge into an already merged tree.
+            var vanillaContainer = CreateVanillaContainer();
+
+            new MusicSwitchContainerMergeService()
+                .MergeBranches(vanillaContainer, [new MusicBranch("Araby", NewRanSeqId)]);
+
+            Assert.That(vanillaContainer.AkDecisionTree.DecisionTree.Nodes, Has.Count.EqualTo(2));
+        }
+
+        [Test]
         public void AMultiArgumentContainerIsRefusedRatherThanMergedWrongly()
         {
             // Battle music branches on the result as well as the culture, so a single keyed node is
