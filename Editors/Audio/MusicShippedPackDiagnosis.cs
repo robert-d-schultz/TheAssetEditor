@@ -929,6 +929,94 @@ namespace Test.Audio
             Console.WriteLine($"\nWrote {outputPath}");
         }
 
+        /// <summary>
+        /// A pack where Cathay's branch points at the mod's own node, as a control on the two things
+        /// the mod depends on that nothing has ever confirmed: that the testing .bnk overrides the
+        /// vanilla .bnk it is named after, and that the mod's node can produce sound at all.
+        ///
+        /// Repointing the new branch at a node known to play was still silent, so the branch is never
+        /// reached and nothing inside the .bnk can be judged through it. Cathay is reached, so this
+        /// drives the mod's node through Cathay's branch instead and leaves everything else alone.
+        ///
+        /// Playing as Cathay separates three cases by ear, which is the point of choosing the modder's
+        /// own wav as the target rather than another culture's music:
+        ///   the supplied wav  - the testing .bnk overrides vanilla and the mod's node plays, so only
+        ///                       the selection of the new branch is broken;
+        ///   silence           - the testing .bnk overrides vanilla but the mod's node is silent, so
+        ///                       the fault is in the generated hierarchy after all;
+        ///   Cathay's music    - the testing .bnk never overrides vanilla, the game has been reading
+        ///                       vanilla's container throughout, and no change to the generated hircs
+        ///                       could ever have been audible.
+        /// </summary>
+        [Test]
+        public void BuildAPackWhereCathayPlaysTheModsNode()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            var testingBank = modPack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music_1_music_araby_for_testing.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var bnk = BnkFile.CreateFromBytes(testingBank.Value.DataSource.ReadData(), testingBank.Key, false);
+            var hircItems = bnk.HircChunk.HircItems;
+
+            foreach (var container in hircItems.OfType<CAkMusicSwitchCntr_V136>())
+            {
+                var cathayLeaves = new List<AkDecisionTree_V136.Node_V136>();
+                var arabyTargets = new List<uint>();
+                CollectLeavesFor(container.AkDecisionTree.DecisionTree, WwiseHash.Compute("cathay"), cathayLeaves);
+                CollectTargetsFor(container.AkDecisionTree.DecisionTree, WwiseHash.Compute("araby"), arabyTargets);
+
+                var arabyTarget = arabyTargets.FirstOrDefault(target => target != 0);
+                Console.WriteLine($"\ncontainer {container.Id}: {cathayLeaves.Count} cathay leaf/leaves, mod node {arabyTarget}");
+
+                if (arabyTarget == 0)
+                {
+                    Console.WriteLine("  !! no mod node to point at, leaving this container alone");
+                    continue;
+                }
+
+                foreach (var leaf in cathayLeaves)
+                {
+                    Console.WriteLine($"  repointing cathay leaf from {leaf.AudioNodeId} to {arabyTarget}");
+                    leaf.AudioNodeId = arabyTarget;
+                }
+
+                // The mod's node is already a declared child, since the araby branch names it, so
+                // this only has to keep the list consistent rather than add anything.
+                var children = container.MusicTransNodeParams.MusicNodeParams.Children;
+                var childIds = new SortedSet<uint>(children.ChildIds) { arabyTarget };
+                children.ChildIds = [.. childIds];
+                children.NumChilds = (uint)childIds.Count;
+
+                container.AkDecisionTree.Nodes = AkDecisionTree_V136.FlattenDecisionTree(container.AkDecisionTree.DecisionTree);
+                container.TreeDataSize = container.AkDecisionTree.GetSize();
+                container.UpdateSectionSize();
+            }
+
+            var bkhdChunkBytes = Shared.GameFormats.Wwise.Bkhd.BkhdChunk.WriteData(bnk.BkhdChunk);
+            var hircChunkBytes = HircChunk.WriteData(
+                Editors.Audio.Shared.Wwise.Generators.Hirc.HircChunkGenerator.GenerateHircChunk(hircItems),
+                bnk.BkhdChunk.AkBankHeader.BankGeneratorVersion);
+
+            using var memStream = new MemoryStream();
+            memStream.Write(bkhdChunkBytes);
+            memStream.Write(hircChunkBytes);
+            var rebuilt = memStream.ToArray();
+
+            var reparsed = BnkFile.CreateFromBytes(rebuilt, testingBank.Key, false);
+            Assert.That(reparsed.HircChunk.HircItems, Has.Count.EqualTo(hircItems.Count));
+
+            testingBank.Value.DataSource = new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt);
+
+            modPack.IsReadOnly = false;
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_cathay_plays_mod_node.pack");
+            provider.GetRequiredService<IPackFileService>().SavePackContainer(modPack, outputPath, false,
+                Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
+
+            Console.WriteLine($"\nWrote {outputPath}");
+        }
+
         static void CollectLeavesFor(AkDecisionTree_V136.Node_V136 node, uint key, List<AkDecisionTree_V136.Node_V136> found, bool matched = false)
         {
             foreach (var child in node.Nodes)
@@ -959,6 +1047,208 @@ namespace Test.Audio
                 else
                     CollectTargetsFor(child, key, found, childMatched);
             }
+        }
+
+        /// <summary>
+        /// Where a State is declared in vanilla, and whether the mod declares its own the same way.
+        ///
+        /// Pointing the new branch at a node known to play left it silent, so the branch is never
+        /// reached and the State is never becoming current. A State Group's members are declared
+        /// outside the decision tree - in the init bank's STMG tables and as State hircs - and the
+        /// editor writes neither, so a State the game has never been told about is the candidate.
+        /// </summary>
+        [Test]
+        public void WhereAStateIsDeclaredInVanilla()
+        {
+            uint[] cultureStates =
+            [
+                WwiseHash.Compute("Cathay"), WwiseHash.Compute("Empire"), WwiseHash.Compute("Araby"),
+            ];
+
+            uint[] stateGroups =
+            [
+                WwiseHash.Compute("Battle_Music_WH3_Culture"), WwiseHash.Compute("WH3_Campaign_Subcultures"),
+            ];
+
+            Console.WriteLine("states:  " + string.Join(", ", new[] { "Cathay", "Empire", "Araby" }
+                .Select(name => $"{name}={WwiseHash.Compute(name)}")));
+            Console.WriteLine("groups:  " + string.Join(", ", new[] { "Battle_Music_WH3_Culture", "WH3_Campaign_Subcultures" }
+                .Select(name => $"{name}={WwiseHash.Compute(name)}")));
+
+            foreach (var packName in new[] { "audio_base_bnk.pack", "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                foreach (var (path, bytes) in VanillaBankReader.ReadMusicBanks(packPath))
+                {
+                    var chunkTags = ReadChunkTags(bytes);
+                    var hasStmg = chunkTags.Any(tag => tag.StartsWith("STMG"));
+
+                    List<HircItem> hircItems;
+                    try
+                    {
+                        hircItems = BnkFile.CreateFromBytes(bytes, path, false).HircChunk?.HircItems ?? [];
+                    }
+                    catch
+                    {
+                        hircItems = [];
+                    }
+
+                    var stateHircs = hircItems.Where(hirc => hirc.HircType == Shared.GameFormats.Wwise.Enums.AkBkHircType.State).ToList();
+                    var namedStates = stateHircs.Where(hirc => cultureStates.Contains(hirc.Id)).Select(hirc => hirc.Id).ToList();
+
+                    if (!hasStmg && stateHircs.Count == 0)
+                        continue;
+
+                    Console.WriteLine($"\n{packName}  {path}");
+                    Console.WriteLine($"  chunks: {string.Join(", ", chunkTags)}");
+                    Console.WriteLine($"  State hircs: {stateHircs.Count}" +
+                        (namedStates.Count == 0 ? "" : $"   including culture states {string.Join(", ", namedStates)}"));
+
+                    if (hasStmg)
+                        ReportStmgGroups(bytes, stateGroups, cultureStates);
+                }
+            }
+
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+            Console.WriteLine("\n################ the mod ################");
+
+            foreach (var file in modPack.GetAllFiles().Where(file => file.Key.EndsWith(".bnk")).OrderBy(file => file.Key))
+            {
+                var bytes = file.Value.DataSource.ReadData();
+                var hircItems = BnkFile.CreateFromBytes(bytes, file.Key, false).HircChunk?.HircItems ?? [];
+                Console.WriteLine($"  {file.Key}: chunks {string.Join(", ", ReadChunkTags(bytes))}, " +
+                    $"State hircs {hircItems.Count(hirc => hirc.HircType == Shared.GameFormats.Wwise.Enums.AkBkHircType.State)}");
+            }
+        }
+
+        /// <summary>
+        /// The State Group table inside an STMG chunk, walked far enough to list the groups and the
+        /// states each one declares. Read by hand because nothing in the codebase parses STMG - which
+        /// is the point of the check.
+        /// </summary>
+        static void ReportStmgGroups(byte[] bytes, uint[] wantedGroups, uint[] wantedStates)
+        {
+            var offset = 0;
+            var stmgStart = -1;
+            uint stmgLength = 0;
+
+            while (offset + 8 <= bytes.Length)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(bytes, offset, 4);
+                var length = BitConverter.ToUInt32(bytes, offset + 4);
+
+                if (tag == "STMG")
+                {
+                    stmgStart = offset + 8;
+                    stmgLength = length;
+                    break;
+                }
+
+                if (length == 0 || offset + 8 + length > (uint)bytes.Length)
+                    break;
+
+                offset += 8 + (int)length;
+            }
+
+            if (stmgStart == -1)
+                return;
+
+            // Every id the chunk contains, so a group or state can be looked for without having to
+            // model the whole layout correctly.
+            var idsInStmg = new HashSet<uint>();
+            for (var index = stmgStart; index + 4 <= stmgStart + (int)stmgLength; index += 4)
+                idsInStmg.Add(BitConverter.ToUInt32(bytes, index));
+
+            Console.WriteLine($"  STMG is {stmgLength} bytes");
+            foreach (var group in wantedGroups)
+                Console.WriteLine($"    state group {group}: {(idsInStmg.Contains(group) ? "PRESENT" : "absent")}");
+            foreach (var state in wantedStates)
+                Console.WriteLine($"    state {state}: {(idsInStmg.Contains(state) ? "PRESENT" : "absent")}");
+        }
+
+        /// <summary>
+        /// What the mod's event data .dat says about the State Groups, next to what vanilla's own
+        /// event data .dats say. If vanilla enumerates the members of a music State Group anywhere,
+        /// that is a list the game reads and a new State has to join.
+        /// </summary>
+        [Test]
+        public void WhatTheEventDataDatSaysAboutStates()
+        {
+            string[] musicStateGroups =
+            [
+                "Battle_Music_WH3_Culture", "WH3_Campaign_Subcultures",
+                "WH3_Campaign_Music_AMS_Fragments_Faction",
+            ];
+
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            var modDat = modPack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("event_data__music_araby.dat", StringComparison.OrdinalIgnoreCase));
+
+            Console.WriteLine($"################ {modDat.Key} ################");
+            ReportDat(Shared.GameFormats.Dat.DatFileParser.Parse(modDat.Value, false));
+
+            // Every vanilla event data .dat, so the group memberships the game ships with can be
+            // read rather than assumed from the editor's comments.
+            foreach (var packName in new[] { "audio_base.pack", "audio_base_bnk.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                using var vanillaProvider = VanillaBankReader.CreateProvider(GameDirectory);
+                var pack = VanillaBankReader.OpenPack(vanillaProvider, packPath);
+
+                foreach (var file in pack.GetAllFiles()
+                    .Where(file => file.Key.EndsWith(".dat", StringComparison.OrdinalIgnoreCase)
+                        && file.Key.Contains("event_data", StringComparison.OrdinalIgnoreCase)))
+                {
+                    Shared.GameFormats.Dat.SoundDatFile parsed;
+                    try
+                    {
+                        parsed = Shared.GameFormats.Dat.DatFileParser.Parse(file.Value, false);
+                    }
+                    catch (Exception exception)
+                    {
+                        Console.WriteLine($"\n{packName} {file.Key}: could not parse - {exception.Message}");
+                        continue;
+                    }
+
+                    var relevant = parsed.StateGroupsWithStates0.Concat(parsed.StateGroupsWithStates1)
+                        .Where(group => musicStateGroups.Contains(group.StateGroup, StringComparer.OrdinalIgnoreCase))
+                        .ToList();
+
+                    if (relevant.Count == 0)
+                        continue;
+
+                    Console.WriteLine($"\n################ {packName} {file.Key} ################");
+                    foreach (var group in relevant)
+                        Console.WriteLine($"  {group.StateGroup}: {group.States.Count} states -> {string.Join(", ", group.States)}");
+                }
+            }
+        }
+
+        static void ReportDat(Shared.GameFormats.Dat.SoundDatFile dat)
+        {
+            Console.WriteLine($"  EventWithStateGroup: {dat.EventWithStateGroup.Count}");
+            foreach (var item in dat.EventWithStateGroup)
+                Console.WriteLine($"    {item.Event} = {item.Value}");
+
+            Console.WriteLine($"  StateGroupsWithStates0: {dat.StateGroupsWithStates0.Count}");
+            foreach (var item in dat.StateGroupsWithStates0)
+                Console.WriteLine($"    {item.StateGroup}: [{string.Join(", ", item.States)}]");
+
+            Console.WriteLine($"  StateGroupsWithStates1: {dat.StateGroupsWithStates1.Count}");
+            foreach (var item in dat.StateGroupsWithStates1)
+                Console.WriteLine($"    {item.StateGroup}: [{string.Join(", ", item.States)}]");
+
+            Console.WriteLine($"  DialogueEventsWithStateGroups: {dat.DialogueEventsWithStateGroups.Count}");
+            Console.WriteLine($"  SettingValues: {dat.SettingValues.Count}");
         }
 
         /// <summary>What the patched scripts actually say, next to what vanilla says, so the match
