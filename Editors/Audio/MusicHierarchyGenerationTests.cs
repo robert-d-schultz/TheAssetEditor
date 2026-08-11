@@ -17,6 +17,7 @@ namespace Test.Audio
         const uint TrackId = 1001;
         const uint RanSeqId = 1002;
         const uint SourceId = 555444333;
+        const uint SwitchContainerId = 698158058;
         const double DurationMs = 28800.02267573696;
 
         [Test]
@@ -115,6 +116,97 @@ namespace Test.Audio
                 Assert.That(reloaded.PlaylistList[0].SrcDuration, Is.EqualTo(DurationMs));
                 Assert.That(reloaded.LookAheadTime, Is.EqualTo(Wh3MusicHierarchyInformation.TrackLookAheadTime));
             });
+        }
+
+        [Test]
+        public void GeneratedRandomSequenceIsParentedToTheSwitchContainerAndListsItsSegments()
+        {
+            var ranSeq = (CAkMusicRanSeqCntr_V136)new CAkMusicRanSeqCntrGenerator_V136().GenerateHirc(CreateRandomSequence(SegmentId));
+            var nodeParams = ranSeq.MusicTransNodeParams.MusicNodeParams;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ranSeq.Id, Is.EqualTo(RanSeqId));
+                Assert.That(nodeParams.NodeBaseParams.DirectParentId, Is.EqualTo(SwitchContainerId));
+                Assert.That(nodeParams.Children.ChildIds, Is.EqualTo(new[] { SegmentId }));
+                Assert.That(ranSeq.MusicTransNodeParams.PlayList, Has.Count.EqualTo(1), "vanilla branches carry exactly one transition rule");
+            });
+        }
+
+        [Test]
+        public void ASingleSegmentPlaysAsAContinuousSequenceAndLoops()
+        {
+            var ranSeq = (CAkMusicRanSeqCntr_V136)new CAkMusicRanSeqCntrGenerator_V136().GenerateHirc(CreateRandomSequence(SegmentId));
+            var root = ranSeq.PlayList.Single();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(root.SegmentId, Is.EqualTo(0), "the root holds no segment of its own");
+                Assert.That(root.RsType, Is.EqualTo(Wh3MusicHierarchyInformation.PlaylistTypeSequenceContinuous));
+                Assert.That(root.PlayList, Has.Count.EqualTo(1));
+
+                // With nothing to hand back to, the leaf is what loops - otherwise the music plays
+                // once and the branch falls silent.
+                Assert.That(root.PlayList[0].SegmentId, Is.EqualTo(SegmentId));
+                Assert.That(root.PlayList[0].Loop, Is.EqualTo(1));
+                Assert.That(root.PlayList[0].RsType, Is.EqualTo(Wh3MusicHierarchyInformation.PlaylistTypeNone));
+            });
+        }
+
+        [Test]
+        public void SeveralSegmentsPlayAsAWeightedRandomPickThatAvoidsRepeats()
+        {
+            var ranSeq = (CAkMusicRanSeqCntr_V136)new CAkMusicRanSeqCntrGenerator_V136().GenerateHirc(CreateRandomSequence(SegmentId, SegmentId + 10));
+            var root = ranSeq.PlayList.Single();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(root.RsType, Is.EqualTo(Wh3MusicHierarchyInformation.PlaylistTypeRandomStep));
+                Assert.That(root.AvoidRepeatCount, Is.EqualTo(1));
+                Assert.That(root.IsUsingWeight, Is.EqualTo(1));
+                Assert.That(root.PlayList.Select(item => item.SegmentId), Is.EqualTo(new[] { SegmentId, SegmentId + 10 }));
+                Assert.That(root.PlayList.Select(item => item.Loop), Is.All.EqualTo(0), "the root does the looping once there is more than one segment");
+            });
+        }
+
+        [Test]
+        public void TheGeneratedRandomSequenceSurvivesAWriteReadRoundTrip()
+        {
+            var ranSeq = (CAkMusicRanSeqCntr_V136)new CAkMusicRanSeqCntrGenerator_V136().GenerateHirc(CreateRandomSequence(SegmentId, SegmentId + 10));
+
+            var reloaded = new CAkMusicRanSeqCntr_V136();
+            reloaded.ReadHirc(new ByteChunk(ranSeq.WriteData()));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(reloaded.Id, Is.EqualTo(RanSeqId));
+
+                // The count on disk is every node in the flattened run, root included, so a root
+                // over two segments is three.
+                Assert.That(reloaded.NumPlaylistItems, Is.EqualTo(3));
+                Assert.That(reloaded.PlayList.Single().PlayList.Select(item => item.SegmentId),
+                    Is.EqualTo(new[] { SegmentId, SegmentId + 10 }));
+
+                var rule = reloaded.MusicTransNodeParams.PlayList.Single();
+                Assert.That(rule.SrcIdList.Single(), Is.EqualTo(Wh3MusicHierarchyInformation.AnyTransitionId));
+                Assert.That(rule.AkMusicTransSrcRule.SyncType, Is.EqualTo(Wh3MusicHierarchyInformation.TransitionSyncTypeExitCue));
+                Assert.That(rule.AkMusicTransDstRule.PlayPreEntry, Is.EqualTo(1));
+            });
+        }
+
+        static MusicRandomSequence CreateRandomSequence(params uint[] segmentIds)
+        {
+            return new MusicRandomSequence
+            {
+                Id = RanSeqId,
+                DirectParentId = SwitchContainerId,
+                PlaylistRootItemId = 12345,
+                Segments = [.. segmentIds.Select((id, index) => new MusicPlaylistEntry
+                {
+                    SegmentId = id,
+                    PlaylistItemId = 12346 + index
+                })]
+            };
         }
 
         static MusicSegment CreateMusicSegment()

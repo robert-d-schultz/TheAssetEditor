@@ -11,6 +11,7 @@ using Shared.GameFormats.Wwise;
 using Shared.GameFormats.Wwise.Enums;
 using Shared.GameFormats.Wwise.Hirc;
 using Shared.GameFormats.Wwise.Hirc.V136;
+using Shared.GameFormats.Wwise.Hirc.V136.Shared;
 
 namespace Test.Audio
 {
@@ -122,7 +123,21 @@ namespace Test.Audio
             if (target is CAkMusicRanSeqCntr_V136 ranSeq)
             {
                 var roots = ranSeq.PlayList;
-                TestContext.Out.WriteLine($"{indent}  playlistRoots={roots.Count} parent={ranSeq.MusicTransNodeParams.MusicNodeParams.NodeBaseParams.DirectParentId} rules={ranSeq.MusicTransNodeParams.PlayList.Count}");
+                var nodeParams = ranSeq.MusicTransNodeParams.MusicNodeParams;
+                TestContext.Out.WriteLine(
+                    $"{indent}  playlistRoots={roots.Count} parent={nodeParams.NodeBaseParams.DirectParentId} " +
+                    $"bus={nodeParams.NodeBaseParams.OverrideBusId} children={nodeParams.Children.ChildIds.Count} " +
+                    $"tempo={nodeParams.AkMeterInfo.Tempo} rules={ranSeq.MusicTransNodeParams.PlayList.Count} " +
+                    $"numPlaylistItems={ranSeq.NumPlaylistItems}");
+
+                // Every field of the playlist nodes, because a generated container has to fill all
+                // of them and none of them can be inferred from the structure alone.
+                foreach (var root in roots)
+                    DumpPlaylistItem(root, indent + "    ");
+
+                foreach (var rule in ranSeq.MusicTransNodeParams.PlayList)
+                    DumpTransitionRule(rule, indent + "    ");
+
                 foreach (var item in roots.SelectMany(root => root.PlayList).Take(2))
                     DumpMusicTarget(repository, item.SegmentId, indent + "    ", depth + 1);
             }
@@ -159,6 +174,35 @@ namespace Test.Audio
                         $"{indent}    clip track={clip.TrackId} source={clip.SourceId} playAt={clip.PlayAt} " +
                         $"beginTrim={clip.BeginTrimOffset} endTrim={clip.EndTrimOffset} duration={clip.SrcDuration}");
             }
+        }
+
+        static void DumpPlaylistItem(CAkMusicRanSeqCntr_V136.AkMusicRanSeqPlaylistItem_V136 item, string indent)
+        {
+            TestContext.Out.WriteLine(
+                $"{indent}playlistItem segment={item.SegmentId} itemId={item.PlaylistItemId} children={item.NumChildren} " +
+                $"rsType={item.RsType} loop={item.Loop} loopMin={item.LoopMin} loopMax={item.LoopMax} weight={item.Weight} " +
+                $"avoidRepeat={item.AvoidRepeatCount} usingWeight={item.IsUsingWeight} shuffle={item.IsShuffle}");
+
+            foreach (var child in item.PlayList)
+                DumpPlaylistItem(child, indent + "  ");
+        }
+
+        static void DumpTransitionRule(MusicTransNodeParams_V136.AkMusicTransitionRule_V136 rule, string indent)
+        {
+            var src = rule.AkMusicTransSrcRule;
+            var dst = rule.AkMusicTransDstRule;
+
+            TestContext.Out.WriteLine(
+                $"{indent}rule src=[{string.Join(",", rule.SrcIdList)}] dst=[{string.Join(",", rule.DstIdList)}] " +
+                $"stateGroupCustom={rule.StateGroupIdCustom} stateCustom={rule.StateIdCustom} " +
+                $"transObj={(rule.AkMusicTransitionObject == null ? "none" : "present")}");
+            TestContext.Out.WriteLine(
+                $"{indent}  srcRule time={src.TransitionTime} curve={src.FadeCurve} offset={src.FadeOffset} " +
+                $"sync={src.SyncType} cueFilter={src.CueFilterHash} playPostExit={src.PlayPostExit}");
+            TestContext.Out.WriteLine(
+                $"{indent}  dstRule time={dst.TransitionTime} curve={dst.FadeCurve} offset={dst.FadeOffset} " +
+                $"cueFilter={dst.CueFilterHash} jumpTo={dst.JumpToId} jumpToType={dst.JumpToType} " +
+                $"entryType={dst.EntryType} playPreEntry={dst.PlayPreEntry} destMatchSourceCueName={dst.DestMatchSourceCueName}");
         }
 
         static void DumpEvent(IAudioRepository repository, string eventName)

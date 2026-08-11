@@ -58,8 +58,36 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         /// <summary>Milliseconds of look ahead, the same on every vanilla music track.</summary>
         public const int TrackLookAheadTime = 100;
 
-        /// <summary>Music nodes sit under their own parent in the hierarchy rather than under an
-        /// actor mixer, and none of them override the bus - both are zero throughout.</summary>
+        /// <summary>
+        /// Music nodes sit under their own parent in the hierarchy rather than under an actor mixer.
+        /// Every vanilla segment and track leaves the bus alone; random sequences mostly do too, but
+        /// not always - 'Dwarfs' routes to bus 3128400633 while the other subculture branches are
+        /// zero. Zero means inherit, which is what a generated branch wants.
+        /// </summary>
         public const uint NoOverrideBusId = 0;
+
+        /// <summary>
+        /// The transition rule on a Music Random Sequence. Every subculture branch carries exactly
+        /// one, and it is byte for byte the same in all of them: any source to any destination
+        /// (-1/-1), no fade, synchronised at the exit cue, playing through the pre-entry and
+        /// post-exit regions.
+        /// </summary>
+        public const uint AnyTransitionId = 0xFFFFFFFF;
+        public const uint TransitionFadeCurve = 4;
+        public const uint TransitionSyncTypeExitCue = 7;
+
+        /// <summary>
+        /// The playlist root's type: continuous sequence when there is a single segment, random step
+        /// when there is more than one. Vanilla uses exactly this split, pairing the random case
+        /// with avoid-repeat and weighting so variations do not play twice in a row.
+        /// </summary>
+        public const uint PlaylistTypeSequenceContinuous = 0;
+        public const uint PlaylistTypeRandomStep = 3;
+
+        /// <summary>Leaf playlist nodes carry no type of their own.</summary>
+        public const uint PlaylistTypeNone = 0xFFFFFFFF;
+
+        /// <summary>The weight on every vanilla playlist node, root and leaf alike.</summary>
+        public const uint PlaylistDefaultWeight = 50000;
     }
 }
