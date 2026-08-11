@@ -1,4 +1,4 @@
-﻿using Editors.Audio.AudioEditor.Commands.AudioFilesExplorer;
+using Editors.Audio.AudioEditor.Commands.AudioFilesExplorer;
 using Editors.Audio.AudioEditor.Commands.AudioProjectEditor;
 using Editors.Audio.AudioEditor.Commands.AudioProjectMutation;
 using Editors.Audio.AudioEditor.Commands.AudioProjectViewer;
@@ -130,6 +130,7 @@ namespace Editors.Audio
             serviceCollection.AddScoped<IWemGeneratorService, WemGeneratorService>();
             serviceCollection.AddScoped<IMusicSwitchContainerMergeService, MusicSwitchContainerMergeService>();
             serviceCollection.AddScoped<IAmsPulseTrackMergeService, AmsPulseTrackMergeService>();
+            serviceCollection.AddScoped<IAmsFragmentMergeService, AmsFragmentMergeService>();
             serviceCollection.AddScoped<IDatGeneratorService, DatGeneratorService>();
 
             // Audio Explorer

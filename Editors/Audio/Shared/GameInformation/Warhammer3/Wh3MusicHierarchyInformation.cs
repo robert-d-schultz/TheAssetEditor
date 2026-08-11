@@ -109,7 +109,24 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         /// can pick wavs and have them reached.
         /// </summary>
         public static bool CanCarryOwnAudio(string stateGroupName) =>
-            GetMusicSwitchContainerId(stateGroupName) != null || IsAmsPulseStateGroup(stateGroupName);
+            GetMusicSwitchContainerId(stateGroupName) != null
+            || IsAmsPulseStateGroup(stateGroupName)
+            || GetAmsFragmentContainerId(stateGroupName) != null;
+
+        /// <summary>
+        /// The plain Switch container that branches on the ambient fragments State Group. Unlike the
+        /// pulses this is a single container rather than a set of tracks, and it is not in the music
+        /// hierarchy at all - the fragments are Sounds laid over the music.
+        ///
+        /// Its children are themselves Switch containers on the musical key, which is why serving
+        /// this Group builds a small hierarchy rather than adding a clip. See
+        /// <see cref="Wwise.Generators.AmsFragmentMergeService"/>.
+        /// </summary>
+        public static uint? GetAmsFragmentContainerId(string stateGroupName) => stateGroupName switch
+        {
+            "WH3_Campaign_Music_AMS_Fragments_Faction" => 418295225,
+            _ => null
+        };
 
         /// <summary>
         /// Cue markers. Every vanilla music segment carries these same three ids: an entry cue at

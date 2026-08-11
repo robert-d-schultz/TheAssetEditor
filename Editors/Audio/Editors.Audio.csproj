@@ -16,6 +16,7 @@
 	  <Compile Remove="AudioExplorerTests.cs" />
 	  <Compile Remove="MusicActionEventIntegrityTests.cs" />
 	  <Compile Remove="MusicAudioProjectServiceTests.cs" />
+	  <Compile Remove="AmsFragmentMergeTests.cs" />
 	  <Compile Remove="AmsPulseTrackMergeTests.cs" />
 	  <Compile Remove="MusicEndToEndRun.cs" />
 	  <Compile Remove="MusicEventShapeResearch.cs" />

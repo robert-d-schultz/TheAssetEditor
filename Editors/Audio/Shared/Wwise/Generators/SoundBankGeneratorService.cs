@@ -39,6 +39,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
         private readonly IAudioEditorIntegrityService _audioEditorIntegrityService;
         private readonly IMusicSwitchContainerMergeService _musicSwitchContainerMergeService;
         private readonly IAmsPulseTrackMergeService _amsPulseTrackMergeService;
+        private readonly IAmsFragmentMergeService _amsFragmentMergeService;
 
         private readonly ILogger _logger = Logging.Create<SoundBankGeneratorService>();
 
@@ -48,7 +49,8 @@ namespace Editors.Audio.Shared.Wwise.Generators
             IAudioRepository audioRepository,
             IAudioEditorIntegrityService audioEditorIntegrityService,
             IMusicSwitchContainerMergeService musicSwitchContainerMergeService,
-            IAmsPulseTrackMergeService amsPulseTrackMergeService)
+            IAmsPulseTrackMergeService amsPulseTrackMergeService,
+            IAmsFragmentMergeService amsFragmentMergeService)
         {
             _fileSaveService = fileSaveService;
             _applicationSettingsService = applicationSettingsService;
@@ -56,6 +58,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
             _audioEditorIntegrityService = audioEditorIntegrityService;
             _musicSwitchContainerMergeService = musicSwitchContainerMergeService;
             _amsPulseTrackMergeService = amsPulseTrackMergeService;
+            _amsFragmentMergeService = amsFragmentMergeService;
 
             var bankGeneratorVersion = (uint)GameInformationDatabase.GetGameById(_applicationSettingsService.CurrentSettings.CurrentGame).BankGeneratorVersion;
             _hircGeneratorServiceFactory = HircGeneratorServiceFactory.CreateFactory(bankGeneratorVersion);
@@ -97,6 +100,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
             // Events, and music is neither - it is reached through the decision tree, so it has its
             // own ordering: tracks before their segments, segments before the sequence over them.
             hircItems.AddRange(GenerateMusicHierarchyHircs(soundBank));
+            hircItems.AddRange(GenerateAmsFragmentHircs(soundBank));
 
             WriteSoundBank(soundBank.Id, soundBank.LanguageId, soundBank.FileName, soundBank.FilePath, hircItems);
         }
@@ -191,6 +195,15 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 containers.Add(moddedTrack);
             }
 
+            foreach (var moddedFragmentContainer in GenerateModdedAmsFragmentContainers(soundBank))
+            {
+                var soundBankNameBase = GetSoundBankNameBase(moddedFragmentContainer.BnkFilePath);
+                if (!containersByVanillaSoundBankName.TryGetValue(soundBankNameBase, out var containers))
+                    containersByVanillaSoundBankName[soundBankNameBase] = containers = [];
+
+                containers.Add(moddedFragmentContainer);
+            }
+
             foreach (var (soundBankNameBase, containers) in containersByVanillaSoundBankName)
             {
                 // The same naming the Dialogue Event testing .bnk uses, for the same reason: '_1_'
@@ -259,6 +272,88 @@ namespace Editors.Audio.Shared.Wwise.Generators
             }
 
             return moddedTracks;
+        }
+
+        /// <summary>
+        /// The ambient fragment hierarchy this bank contributes: the Switch container on the musical
+        /// key Group, and the Sounds and any container under it. All new ids, so these ship in the
+        /// mod's own .bnk - it is only the vanilla faction container above them that clashes.
+        /// </summary>
+        private List<HircItem> GenerateAmsFragmentHircs(SoundBank soundBank)
+        {
+            var hircItems = new List<HircItem>();
+
+            foreach (var amsFragment in soundBank.AmsFragments)
+            {
+                var vanillaContainer = GetVanillaAmsFragmentContainer(amsFragment.FactionSwitchContainerId);
+                if (vanillaContainer == null)
+                    continue;
+
+                foreach (var soundId in amsFragment.SoundIds)
+                {
+                    var sound = soundBank.GetSound(soundId);
+                    if (sound != null)
+                        hircItems.Add(_hircGeneratorServiceFactory.GenerateHirc(sound, soundBank));
+                }
+
+                var container = soundBank.GetRandomSequenceContainer(amsFragment.TargetHircId);
+                if (container != null)
+                    hircItems.Add(_hircGeneratorServiceFactory.GenerateHirc(container, soundBank));
+
+                hircItems.Add(_amsFragmentMergeService.CreateKeySwitchContainer(
+                    vanillaContainer, new AudioRepositorySwitchLookup(_audioRepository),
+                    amsFragment.KeySwitchContainerId, amsFragment.TargetHircId));
+            }
+
+            return hircItems;
+        }
+
+        /// <summary>
+        /// The vanilla ambient fragments containers re-emitted with this mod's cultures added. These
+        /// keep their vanilla ids, so like the Music Switch containers they belong in the testing and
+        /// merging .bnks rather than the mod's own.
+        /// </summary>
+        private List<CAkSwitchCntr_V136> GenerateModdedAmsFragmentContainers(SoundBank soundBank)
+        {
+            var moddedContainers = new List<CAkSwitchCntr_V136>();
+
+            foreach (var fragmentsByContainer in soundBank.AmsFragments.GroupBy(fragment => fragment.FactionSwitchContainerId))
+            {
+                var vanillaContainer = GetVanillaAmsFragmentContainer(fragmentsByContainer.Key);
+                if (vanillaContainer == null)
+                    continue;
+
+                var branches = fragmentsByContainer
+                    .Select(fragment => new AmsFragmentBranch(fragment.StateName, fragment.KeySwitchContainerId))
+                    .ToList();
+
+                var moddedContainer = _amsFragmentMergeService.AddCultures(vanillaContainer, branches);
+                moddedContainer.BnkFilePath = vanillaContainer.BnkFilePath;
+                moddedContainers.Add(moddedContainer);
+            }
+
+            return moddedContainers;
+        }
+
+        private CAkSwitchCntr_V136 GetVanillaAmsFragmentContainer(uint containerId)
+        {
+            var vanillaContainer = _audioRepository.GetHircs(containerId)
+                .OfType<CAkSwitchCntr_V136>()
+                .FirstOrDefault(container => container.IsCA);
+
+            if (vanillaContainer == null)
+                _logger.Here().Error(
+                    $"Switch container {containerId} was not found in the vanilla data, so its cultures cannot be merged");
+
+            return vanillaContainer;
+        }
+
+        /// <summary>The one lookup the fragment merge needs, so it does not take the whole
+        /// repository interface to read a sibling's musical keys.</summary>
+        private sealed class AudioRepositorySwitchLookup(IAudioRepository audioRepository) : IAudioRepositoryLookup
+        {
+            public CAkSwitchCntr_V136 FindSwitchContainer(uint id) =>
+                audioRepository.GetHircs(id).OfType<CAkSwitchCntr_V136>().FirstOrDefault();
         }
 
         /// <summary>
@@ -390,6 +485,8 @@ namespace Editors.Audio.Shared.Wwise.Generators
             hircItems.AddRange(GenerateMusicHierarchyHircs(soundBank));
             hircItems.AddRange(GenerateModdedMusicSwitchContainers(soundBank));
             hircItems.AddRange(GenerateModdedAmsPulseTracks(soundBank));
+            hircItems.AddRange(GenerateAmsFragmentHircs(soundBank));
+            hircItems.AddRange(GenerateModdedAmsFragmentContainers(soundBank));
 
             WriteSoundBank(soundBank.MergingId, soundBank.LanguageId, soundBank.MergingFileName, soundBank.MergingFilePath, hircItems);
         }
@@ -444,10 +541,25 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 .Where(track => track.SwitchParams != null)
                 .ToList();
 
-            if (moddedContainers.Count == 0 && moddedTracks.Count == 0)
+            // Only the faction containers matter here: a mod's own key switches are new ids that ship
+            // in its own .bnk and need no merging.
+            var moddedFragmentContainers = _audioRepository.GetHircs(AkBkHircType.SwitchContainer)
+                .OfType<CAkSwitchCntr_V136>()
+                .Where(container => !container.IsCA && moddedSoundBanks.Contains(container.BnkFilePath))
+                .Where(container => _audioRepository.GetHircs(container.Id).Any(hirc => hirc.IsCA))
+                .ToList();
+
+            if (moddedContainers.Count == 0 && moddedTracks.Count == 0 && moddedFragmentContainers.Count == 0)
                 return;
 
             var mergedTracksByBnk = MergeAmsPulseTracks(moddedTracks);
+            foreach (var (bnkFilePath, mergedFragments) in MergeAmsFragmentContainers(moddedFragmentContainers))
+            {
+                if (!mergedTracksByBnk.TryGetValue(bnkFilePath, out var hircsForBnk))
+                    mergedTracksByBnk[bnkFilePath] = hircsForBnk = [];
+
+                hircsForBnk.AddRange(mergedFragments);
+            }
 
             foreach (var (vanillaBnkFilePath, vanillaContainers) in _audioRepository.GetVanillaMusicSwitchContainersByBnk())
             {
@@ -541,6 +653,44 @@ namespace Editors.Audio.Shared.Wwise.Generators
             }
 
             return mergedTracksByBnk;
+        }
+
+        /// <summary>
+        /// Combines every mod's ambient fragment containers, keyed by the vanilla .bnk they override.
+        ///
+        /// Easier than the switch tracks: a Switch container names its branches by switch id, so this
+        /// merges by key the way a decision tree does and two mods adding different cultures cannot
+        /// collide however many came before.
+        /// </summary>
+        private Dictionary<string, List<HircItem>> MergeAmsFragmentContainers(List<CAkSwitchCntr_V136> moddedContainers)
+        {
+            var mergedByBnk = new Dictionary<string, List<HircItem>>();
+
+            foreach (var containersById in moddedContainers.GroupBy(container => container.Id))
+            {
+                var vanillaContainer = _audioRepository.GetHircs(containersById.Key)
+                    .OfType<CAkSwitchCntr_V136>()
+                    .FirstOrDefault(container => container.IsCA);
+
+                if (vanillaContainer == null)
+                    continue;
+
+                _logger.Here().Information($"Merging cultures into Switch container {vanillaContainer.Id}");
+
+                var mergedContainer = vanillaContainer;
+                foreach (var moddedContainer in containersById)
+                {
+                    _logger.Here().Information($"Merging cultures from {Path.GetFileName(moddedContainer.BnkFilePath)}");
+                    mergedContainer = _amsFragmentMergeService.MergeContainers(mergedContainer, moddedContainer);
+                }
+
+                if (!mergedByBnk.TryGetValue(vanillaContainer.BnkFilePath, out var containersForBnk))
+                    mergedByBnk[vanillaContainer.BnkFilePath] = containersForBnk = [];
+
+                containersForBnk.Add(mergedContainer);
+            }
+
+            return mergedByBnk;
         }
 
         private List<HircItem> GenerateActionEventHircs(SoundBank soundBank, Dictionary<ActionEvent, HircItem> actionEventToHircLookup)

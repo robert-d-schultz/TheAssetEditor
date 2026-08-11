@@ -57,14 +57,25 @@ namespace Editors.MusicDatEditor.ViewModels
         {
             get
             {
-                // Worth being specific that this is a fallback rather than a failure: these State
-                // Groups are read by switch tracks and a plain Switch container, both of which have
-                // a default, so an unlisted culture gets the default's audio and not silence.
                 if (!CanCarryOwnAudio)
                     return "This event can only select music that already exists - the Audio Editor cannot give it " +
-                           "files of its own, because its State Group is read by the adaptive music system rather " +
-                           "than by a decision tree a mod can extend. Left as a new name it falls back to that " +
-                           "system's default, so it still plays something; point it at an existing culture to choose what.";
+                           "files of its own, because nothing in the game branches on its State Group in a way a " +
+                           "mod can extend. Point it at an existing culture's music instead.";
+
+                // The adaptive music system layers over whatever theme is playing rather than being a
+                // piece of music in its own right, so what a modder should supply is quite different -
+                // worth saying before they pick a five minute track for it.
+                if (Wh3MusicHierarchyInformation.IsAmsPulseStateGroup(StateGroupName))
+                    return "Audio can be added to this event in the Audio Editor. This is an adaptive music pulse - " +
+                           "a rhythmic layer played over the campaign theme, not a theme itself - and the game has " +
+                           "nine slots for it. Supply one short loop and it is used for all nine, or up to nine to " +
+                           "vary it across the piece. Anything longer than a slot is trimmed to fit.";
+
+                if (Wh3MusicHierarchyInformation.GetAmsFragmentContainerId(StateGroupName) != null)
+                    return "Audio can be added to this event in the Audio Editor. These are ambient fragments - short " +
+                           "sounds laid over the campaign music rather than music itself. Vanilla varies them by the " +
+                           "musical key the score is in; anything added here plays in every key, since only the " +
+                           "composer of a piece can meaningfully write a fragment per key.";
 
                 // Worth saying because the decision tree makes it so rather than anyone choosing it:
                 // battle music branches on the result above the culture, and vanilla has no default

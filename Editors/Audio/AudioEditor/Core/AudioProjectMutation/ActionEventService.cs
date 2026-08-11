@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -130,6 +130,13 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                 return;
             }
 
+            var fragmentContainerId = Wh3MusicHierarchyInformation.GetAmsFragmentContainerId(stateGroupName);
+            if (fragmentContainerId != null)
+            {
+                AddAmsFragment(soundBank, stateGroupName, stateName, audioFiles, usedHircIds, fragmentContainerId.Value);
+                return;
+            }
+
             var musicSwitchContainerId = Wh3MusicHierarchyInformation.GetMusicSwitchContainerId(stateGroupName);
             if (musicSwitchContainerId == null)
             {
@@ -205,6 +212,118 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                 if (_audioEditorStateService.AudioProject.GetAudioFile(audioFile.Id) == null)
                     _audioEditorStateService.AudioProject.AudioFiles.TryAdd(audioFile);
             }
+        }
+
+        /// <summary>
+        /// Audio for the ambient fragments Group. This one does build a hierarchy: the wavs become
+        /// Sounds, a Random Sequence container over them when there is more than one, and a Switch
+        /// container on the musical key Group that the vanilla faction container will point at.
+        ///
+        /// The Sounds go in the bank's own Sound list, which is where the compiler already looks for
+        /// wem paths, so they need no special handling beyond being generated.
+        /// </summary>
+        private void AddAmsFragment(
+            SoundBank soundBank, string stateGroupName, string stateName, List<AudioFile> audioFiles,
+            HashSet<uint> usedHircIds, uint fragmentContainerId)
+        {
+            var existing = soundBank.AmsFragments
+                .FirstOrDefault(fragment => fragment.StateName == stateName && fragment.StateGroupName == stateGroupName);
+
+            if (existing != null)
+            {
+                _logger.Here().Information(
+                    $"'{stateName}' already has ambient fragments; remove the Event and add it again to change them");
+                return;
+            }
+
+            var sounds = new List<Sound>();
+            foreach (var audioFile in audioFiles)
+            {
+                var soundIds = IdGenerator.GenerateIds(usedHircIds);
+                sounds.Add(Sound.CreateContainerSound(
+                    soundIds.Guid, soundIds.Id, directParentId: 0, playlistOrder: sounds.Count,
+                    sourceId: audioFile.Id, language: soundBank.Language));
+
+                if (_audioEditorStateService.AudioProject.GetAudioFile(audioFile.Id) == null)
+                    _audioEditorStateService.AudioProject.AudioFiles.TryAdd(audioFile);
+            }
+
+            if (sounds.Count == 0)
+                return;
+
+            var keySwitchIds = IdGenerator.GenerateIds(usedHircIds);
+
+            // One Sound needs nothing over it; several need a container to pick between them, which
+            // is the same shape a Play Action Event uses for a set of variations.
+            uint targetHircId;
+            if (sounds.Count == 1)
+            {
+                targetHircId = sounds[0].Id;
+            }
+            else
+            {
+                var containerIds = IdGenerator.GenerateIds(usedHircIds);
+                targetHircId = containerIds.Id;
+
+                soundBank.RandomSequenceContainers.TryAdd(new RandomSequenceContainer(
+                    containerIds.Guid, containerIds.Id, overrideBusId: 0, directParentId: keySwitchIds.Id,
+                    hircSettings: _audioEditorStateService.HircSettings,
+                    children: [.. sounds.Select(sound => sound.Id)]));
+            }
+
+            foreach (var sound in sounds)
+            {
+                sound.DirectParentId = sounds.Count == 1 ? keySwitchIds.Id : targetHircId;
+                soundBank.Sounds.TryAdd(sound);
+
+                var audioFile = _audioEditorStateService.AudioProject.GetAudioFile(sound.SourceId);
+                if (audioFile != null && !audioFile.Sounds.Contains(sound.Id))
+                    audioFile.Sounds.Add(sound.Id);
+            }
+
+            soundBank.AmsFragments.Add(new AmsFragment
+            {
+                StateGroupName = stateGroupName,
+                StateName = stateName,
+                FactionSwitchContainerId = fragmentContainerId,
+                KeySwitchContainerId = keySwitchIds.Id,
+                TargetHircId = targetHircId,
+                SoundIds = [.. sounds.Select(sound => sound.Id)]
+            });
+        }
+
+        /// <summary>The fragment hierarchy a removed Event's State built, dropped on the same
+        /// condition as a music branch.</summary>
+        private void RemoveAmsFragment(SoundBank soundBank, string stateGroupName, string stateName)
+        {
+            var amsFragment = soundBank.AmsFragments
+                .FirstOrDefault(fragment => fragment.StateName == stateName && fragment.StateGroupName == stateGroupName);
+
+            if (amsFragment == null)
+                return;
+
+            foreach (var soundId in amsFragment.SoundIds)
+            {
+                var sound = soundBank.GetSound(soundId);
+                if (sound == null)
+                    continue;
+
+                soundBank.Sounds.Remove(sound);
+
+                var audioFile = _audioEditorStateService.AudioProject.GetAudioFile(sound.SourceId);
+                if (audioFile == null)
+                    continue;
+
+                audioFile.Sounds.Remove(sound.Id);
+                if (audioFile.Sounds.Count == 0)
+                    _audioEditorStateService.AudioProject.AudioFiles.Remove(audioFile);
+            }
+
+            var container = soundBank.GetRandomSequenceContainer(amsFragment.TargetHircId);
+            if (container != null)
+                soundBank.RandomSequenceContainers.Remove(container);
+
+            soundBank.AmsFragments.Remove(amsFragment);
         }
 
         /// <summary>The pulse clips a removed Event's State contributed, dropped on the same
@@ -302,6 +421,7 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                     continue;
 
                 RemoveAmsPulse(soundBank, setStateAction.StateGroupName, setStateAction.StateName);
+                RemoveAmsFragment(soundBank, setStateAction.StateGroupName, setStateAction.StateName);
 
                 var musicRandomSequence = soundBank.MusicRandomSequences
                     .FirstOrDefault(randomSequence =>

@@ -26,6 +26,10 @@ namespace Test.Audio
             AkBkHircType.Music_Track,
             AkBkHircType.Music_Switch,
             AkBkHircType.Music_Random_Sequence,
+
+            // Not music, but the ambient fragments the campaign music layers over it are a plain
+            // Switch container, so serving that State Group needs this to write correctly too.
+            AkBkHircType.SwitchContainer,
         ];
 
         [Test]

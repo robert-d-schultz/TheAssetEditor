@@ -81,6 +81,7 @@ namespace Test.Audio
             AssertTheScriptsAndTheBankAgree(packFileService, compiledProject);
             AssertTheMergedContainersKeepVanilla(packFileService, provider.GetRequiredService<IAudioRepository>(), compiledProject);
             AssertThePulseTracksCarryTheNewCulture(packFileService, provider.GetRequiredService<IAudioRepository>(), compiledProject);
+            AssertTheFragmentsReachTheNewCulturesAudio(packFileService, provider.GetRequiredService<IAudioRepository>(), compiledProject);
 
             Directory.CreateDirectory(OutputDirectory);
             var packDiskPath = Path.Combine(OutputDirectory, "araby_music.pack");
@@ -324,6 +325,78 @@ namespace Test.Audio
                     Console.WriteLine($"\n{amsPulse.StateGroupName}: {vanillaTracks.Count} track(s) given a '{MusicalCulture}' sub-track");
                 }
             });
+        }
+
+        /// <summary>
+        /// The last of the four AMS Groups, and the one that builds a hierarchy rather than adding to
+        /// a vanilla one. Walked from the vanilla faction container all the way down to the wem,
+        /// because every link in it is generated and a break anywhere is silence rather than an error.
+        /// </summary>
+        static void AssertTheFragmentsReachTheNewCulturesAudio(
+            IPackFileService packFileService, IAudioRepository audioRepository, AudioProjectFile compiledProject)
+        {
+            var musicSoundBank = compiledProject.SoundBanks.Single(soundBank => soundBank.AmsFragments.Count != 0);
+            var amsFragment = musicSoundBank.AmsFragments.Single();
+
+            var vanillaContainer = audioRepository.GetHircs(amsFragment.FactionSwitchContainerId)
+                .OfType<CAkSwitchCntr_V136>()
+                .Single(container => container.IsCA);
+
+            var mergedContainer = packFileService.GetEditablePack().GetAllFiles()
+                .Select(file => file.Key)
+                .Where(path => path.EndsWith("_for_testing.bnk"))
+                .SelectMany(path => ReadHircs(packFileService, path))
+                .OfType<CAkSwitchCntr_V136>()
+                .Single(container => container.Id == amsFragment.FactionSwitchContainerId);
+
+            // The mod's own .bnk, since the key switch and the sounds are all new ids.
+            var moddedHircs = ReadHircs(packFileService, musicSoundBank.FilePath);
+            var keySwitch = moddedHircs.OfType<CAkSwitchCntr_V136>().Single(c => c.Id == amsFragment.KeySwitchContainerId);
+
+            Assert.Multiple(() =>
+            {
+                var cultureSwitch = mergedContainer.SwitchList
+                    .Cast<CAkSwitchCntr_V136.CAkSwitchPackage_V136>()
+                    .SingleOrDefault(package => package.SwitchId == WwiseHash.Compute(MusicalCulture));
+
+                Assert.That(cultureSwitch, Is.Not.Null, $"the faction container has no switch for '{MusicalCulture}'");
+                Assert.That(cultureSwitch.NodeIdList, Is.EqualTo(new[] { amsFragment.KeySwitchContainerId }));
+                Assert.That(mergedContainer.Children.ChildIds, Does.Contain(amsFragment.KeySwitchContainerId));
+
+                // Vanilla's cultures have to survive; this .bnk replaces campaign_music__core's copy.
+                foreach (var vanillaSwitch in vanillaContainer.SwitchList.Cast<CAkSwitchCntr_V136.CAkSwitchPackage_V136>())
+                    Assert.That(mergedContainer.SwitchList
+                        .Cast<CAkSwitchCntr_V136.CAkSwitchPackage_V136>()
+                        .Any(package => package.SwitchId == vanillaSwitch.SwitchId
+                            && package.NodeIdList.SequenceEqual(vanillaSwitch.NodeIdList)),
+                        Is.True, $"vanilla switch {vanillaSwitch.SwitchId} was lost or re-pointed");
+
+                // The key switch has to branch on the same Group vanilla's siblings do, or the game
+                // looks up a State Group nothing ever sets and always takes the default.
+                var vanillaSibling = vanillaContainer.Children.ChildIds
+                    .SelectMany(childId => audioRepository.GetHircs(childId))
+                    .OfType<CAkSwitchCntr_V136>()
+                    .First(child => child.SwitchList.Count != 0);
+
+                Assert.That(keySwitch.GroupId, Is.EqualTo(vanillaSibling.GroupId));
+                Assert.That(keySwitch.NodeBaseParams.DirectParentId, Is.EqualTo(amsFragment.FactionSwitchContainerId));
+                Assert.That(keySwitch.SwitchList, Has.Count.EqualTo(vanillaSibling.SwitchList.Count));
+
+                foreach (var keyPackage in keySwitch.SwitchList.Cast<CAkSwitchCntr_V136.CAkSwitchPackage_V136>())
+                    Assert.That(keyPackage.NodeIdList, Is.EqualTo(new[] { amsFragment.TargetHircId }));
+
+                // And the bottom of the chain: whatever the keys point at has to be in the bank.
+                Assert.That(moddedHircs.Any(hirc => hirc.Id == amsFragment.TargetHircId), Is.True,
+                    $"the key switch points at {amsFragment.TargetHircId}, which is in no .bnk");
+
+                foreach (var soundId in amsFragment.SoundIds)
+                    Assert.That(moddedHircs.Any(hirc => hirc.Id == soundId && hirc.HircType == AkBkHircType.Sound), Is.True,
+                        $"Sound {soundId} was not generated");
+            });
+
+            Console.WriteLine(
+                $"\nfragments: '{MusicalCulture}' -> key switch {amsFragment.KeySwitchContainerId} " +
+                $"({keySwitch.SwitchList.Count} keys) -> {amsFragment.TargetHircId} -> {amsFragment.SoundIds.Count} sound(s)");
         }
 
         /// <summary>Walks both trees together, since a battle branch is a path rather than a single

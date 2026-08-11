@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
@@ -47,6 +47,13 @@ namespace Editors.Audio.Shared.AudioProject.Models
         /// </summary>
         public List<AmsPulse> AmsPulses { get; set; } = [];
 
+        /// <summary>
+        /// Audio for the adaptive music system's ambient fragments. Unlike the pulses these do
+        /// generate hircs of their own - a Switch container on the musical key Group and the Sounds
+        /// under it - but the vanilla container above them still has to be merged.
+        /// </summary>
+        public List<AmsFragment> AmsFragments { get; set; } = [];
+
         public SoundBank(string name, Wh3SoundBank gameSoundBank, string language)
         {
             Id = WwiseHash.Compute(name);
@@ -77,8 +84,13 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 .Where(amsPulse => amsPulse.Clips.Count != 0)
                 .ToList();
 
+            var cleanedAmsFragments = AmsFragments
+                .Where(amsFragment => amsFragment.SoundIds.Count != 0)
+                .ToList();
+
             if (cleanedDialogueEvents.Count == 0 && cleanedActionEvents.Count == 0
-                && cleanedMusicRandomSequences.Count == 0 && cleanedAmsPulses.Count == 0)
+                && cleanedMusicRandomSequences.Count == 0 && cleanedAmsPulses.Count == 0
+                && cleanedAmsFragments.Count == 0)
                 return null;
 
             return new SoundBank(Name, GameSoundBank, Language)
@@ -98,7 +110,8 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 RandomSequenceContainers = RandomSequenceContainers.ToList(),
                 MusicRandomSequences = cleanedMusicRandomSequences,
                 MusicSegments = MusicSegments.ToList(),
-                AmsPulses = cleanedAmsPulses
+                AmsPulses = cleanedAmsPulses,
+                AmsFragments = cleanedAmsFragments
             };
         }
 
