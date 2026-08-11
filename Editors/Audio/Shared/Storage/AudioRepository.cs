@@ -41,6 +41,8 @@ namespace Editors.Audio.Shared.Storage
         Dictionary<string, Dictionary<string, List<HircItem>>> GetVanillaDialogueEventsByBnkByLanguage();
         Dictionary<string, Dictionary<string, List<HircItem>>> GetModdedHircsByBnkByLanguage();
         Dictionary<string, List<HircItem>> GetModdedDialogueEventsByLanguage(List<string> moddedSoundBanks);
+        Dictionary<string, List<HircItem>> GetVanillaMusicSwitchContainersByBnk();
+        List<HircItem> GetModdedMusicSwitchContainers(List<string> moddedSoundBanks);
         List<string> GetModdedSoundBankFilePaths(string bnkNameSubstring);
         PackFile FindWem(string wemId);
         byte[] FindDataWem(uint dataSoundbankId, int fileOffset, int byteCount);
@@ -413,6 +415,23 @@ namespace Editors.Audio.Shared.Storage
                 .Where(hirc => hirc.IsCA == false && moddedSoundBanks.Contains(hirc.BnkFilePath))
                 .GroupBy(hirc => GetNameFromId(hirc.LanguageId))
                 .ToDictionary(group => group.Key, group => group.ToList());
+        }
+
+        // Not grouped by language the way Dialogue Events are: music is sfx, so there is only ever
+        // one language to group by, and the .bnk a container came from is what a merge needs anyway.
+        public Dictionary<string, List<HircItem>> GetVanillaMusicSwitchContainersByBnk()
+        {
+            return GetHircs(AkBkHircType.Music_Switch)
+                .Where(hirc => hirc.IsCA)
+                .GroupBy(hirc => hirc.BnkFilePath)
+                .ToDictionary(bnkGroup => bnkGroup.Key, bnkGroup => bnkGroup.ToList());
+        }
+
+        public List<HircItem> GetModdedMusicSwitchContainers(List<string> moddedSoundBanks)
+        {
+            return GetHircs(AkBkHircType.Music_Switch)
+                .Where(hirc => hirc.IsCA == false && moddedSoundBanks.Contains(hirc.BnkFilePath))
+                .ToList();
         }
 
         public List<string> GetModdedSoundBankFilePaths(string bnkNameSubstring)

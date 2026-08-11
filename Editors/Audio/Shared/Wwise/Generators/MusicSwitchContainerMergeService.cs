@@ -15,6 +15,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
     {
         CAkMusicSwitchCntr_V136 CreateModdedContainer(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches);
         CAkMusicSwitchCntr_V136 MergeBranches(CAkMusicSwitchCntr_V136 vanillaContainer, IReadOnlyList<MusicBranch> branches);
+        CAkMusicSwitchCntr_V136 MergeContainers(CAkMusicSwitchCntr_V136 baseContainer, CAkMusicSwitchCntr_V136 mergingContainer);
     }
 
     /// <summary>
@@ -66,6 +67,23 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 vanillaContainer.AkDecisionTree.DecisionTree);
 
             return CopyWithDecisionTree(vanillaContainer, mergedTree);
+        }
+
+        /// <summary>
+        /// Folds one container's branches into another's, for the merger combining several mods.
+        /// The base takes priority where both claim the same State, and everything outside the tree
+        /// comes from the base.
+        /// </summary>
+        public CAkMusicSwitchCntr_V136 MergeContainers(CAkMusicSwitchCntr_V136 baseContainer, CAkMusicSwitchCntr_V136 mergingContainer)
+        {
+            ArgumentNullException.ThrowIfNull(baseContainer);
+            ArgumentNullException.ThrowIfNull(mergingContainer);
+
+            var mergedTree = AkDecisionTree_V136.MergeDecisionTrees(
+                baseContainer.AkDecisionTree.DecisionTree,
+                mergingContainer.AkDecisionTree.DecisionTree);
+
+            return CopyWithDecisionTree(baseContainer, mergedTree);
         }
 
         /// <summary>

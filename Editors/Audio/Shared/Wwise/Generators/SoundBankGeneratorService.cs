@@ -27,6 +27,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
         void GenerateMusicSwitchContainersForTestingSoundBanks(SoundBank soundBank);
         void GenerateMergingSoundBank(SoundBank soundBank);
         void GenerateMergedDialogueEventSoundBanks(List<string> moddedSoundBanks, string soundBankSuffix);
+        void GenerateMergedMusicSoundBanks(List<string> moddedSoundBanks, string soundBankSuffix);
     }
 
     public class SoundBankGeneratorService : ISoundBankGeneratorService
@@ -337,6 +338,63 @@ namespace Editors.Audio.Shared.Wwise.Generators
 
                     GenerateMergedDialogueEventSoundBank(hircsByBnk.Value, moddedDialogueEventsByLanguage, language, currentSoundBank, soundBankSuffix);
                 }
+            }
+        }
+
+        /// <summary>
+        /// The music counterpart of <see cref="GenerateMergedDialogueEventSoundBanks"/>: takes the
+        /// merging .bnks from several mods and writes one .bnk per vanilla .bnk holding the Music
+        /// Switch containers with everyone's branches in them.
+        /// </summary>
+        public void GenerateMergedMusicSoundBanks(List<string> moddedSoundBanks, string soundBankSuffix)
+        {
+            var moddedContainers = _audioRepository.GetModdedMusicSwitchContainers(moddedSoundBanks);
+            if (moddedContainers.Count == 0)
+                return;
+
+            foreach (var (vanillaBnkFilePath, vanillaContainers) in _audioRepository.GetVanillaMusicSwitchContainersByBnk())
+            {
+                var mergedContainers = new List<HircItem>();
+
+                foreach (var vanillaHirc in vanillaContainers)
+                {
+                    var vanillaContainer = vanillaHirc as CAkMusicSwitchCntr_V136;
+                    var matchingModdedContainers = moddedContainers
+                        .Where(moddedHirc => moddedHirc.Id == vanillaContainer.Id)
+                        .Cast<CAkMusicSwitchCntr_V136>()
+                        .ToList();
+
+                    if (matchingModdedContainers.Count == 0)
+                        continue;
+
+                    _logger.Here().Information($"Merging Music Switch container {_audioRepository.GetNameFromId(vanillaContainer.Id)}");
+
+                    // The mods are folded together first and vanilla last, so every mod's branches
+                    // beat vanilla's. That is the opposite of the Dialogue Event merge, which starts
+                    // from vanilla - but a music branch is usually a replacement of a culture vanilla
+                    // already covers, and letting vanilla win would silently undo exactly the change
+                    // the modder tested and shipped.
+                    var mergedContainer = matchingModdedContainers[0];
+                    foreach (var moddedContainer in matchingModdedContainers.Skip(1))
+                    {
+                        _logger.Here().Information($"Merging decision tree from {Path.GetFileName(moddedContainer.BnkFilePath)}");
+                        mergedContainer = _musicSwitchContainerMergeService.MergeContainers(mergedContainer, moddedContainer);
+                    }
+
+                    mergedContainers.Add(_musicSwitchContainerMergeService.MergeContainers(mergedContainer, vanillaContainer));
+                }
+
+                if (mergedContainers.Count == 0)
+                    continue;
+
+                var soundBankNameBase = GetSoundBankNameBase(vanillaBnkFilePath);
+                var soundBankNameWithoutExtension = $"{soundBankNameBase}_0_{soundBankSuffix}";
+                var fileName = $"{soundBankNameWithoutExtension}.bnk";
+                var language = _audioRepository.GetNameFromId(vanillaContainers[0].LanguageId);
+                var filePath = GetSoundBankFilePath(fileName, language);
+
+                _logger.Here().Information($"Merging Music Switch containers for SoundBank {filePath}");
+                WriteSoundBank(WwiseHash.Compute(soundBankNameWithoutExtension), vanillaContainers[0].LanguageId, fileName, filePath, mergedContainers);
             }
         }
 

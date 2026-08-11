@@ -130,6 +130,36 @@ namespace Test.Audio
         }
 
         [Test]
+        public void CombiningTwoModsKeepsBothAndLetsTheFirstWinTheOverlap()
+        {
+            // What the merger does with two modders' merging .bnks. Whoever is listed first wins a
+            // culture both claimed, matching how the Dialogue Event merge breaks ties.
+            var mergeService = new MusicSwitchContainerMergeService();
+            var vanillaContainer = CreateVanillaContainer();
+
+            var firstMod = mergeService.CreateModdedContainer(vanillaContainer,
+                [new MusicBranch("Araby", NewRanSeqId), new MusicBranch("Dwarfs", NewRanSeqId)]);
+            var secondMod = mergeService.CreateModdedContainer(vanillaContainer,
+                [new MusicBranch("Cathay", 6000), new MusicBranch("Dwarfs", 7000)]);
+
+            var merged = mergeService.MergeContainers(
+                mergeService.MergeContainers(firstMod, secondMod), vanillaContainer);
+
+            var branchesByKey = merged.AkDecisionTree.DecisionTree.Nodes.ToDictionary(node => node.Key);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(branchesByKey[WwiseHash.Compute("Araby")].AudioNodeId, Is.EqualTo(NewRanSeqId));
+                Assert.That(branchesByKey[WwiseHash.Compute("Cathay")].AudioNodeId, Is.EqualTo(6000u));
+                Assert.That(branchesByKey[WwiseHash.Compute("Dwarfs")].AudioNodeId, Is.EqualTo(NewRanSeqId), "the first mod listed wins");
+
+                // Vanilla goes in last so a mod replacing a culture is not silently undone, but the
+                // cultures nobody claimed still have to come through.
+                Assert.That(branchesByKey.ContainsKey(0u), "the default branch survives");
+            });
+        }
+
+        [Test]
         public void AMultiArgumentContainerIsRefusedRatherThanMergedWrongly()
         {
             // Battle music branches on the result as well as the culture, so a single keyed node is

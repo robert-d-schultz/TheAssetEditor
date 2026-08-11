@@ -88,6 +88,10 @@ namespace Editors.Audio.DialogueEventMerger
 
             _soundBankGeneratorService.GenerateMergedDialogueEventSoundBanks(SelectedModdedSoundBanks.ToList(), SoundBankSuffix);
 
+            // Music merges out of the same merging .bnks and has the same problem, so it goes through
+            // the same button rather than a second one the modder has to know to press.
+            _soundBankGeneratorService.GenerateMergedMusicSoundBanks(SelectedModdedSoundBanks.ToList(), SoundBankSuffix);
+
             CloseWindowAction();
         }
 
