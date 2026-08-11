@@ -535,6 +535,315 @@ namespace Test.Audio
             }
         }
 
+        /// <summary>The mod's chain against Cathay's, field by field. Cathay plays in game under the
+        /// same conditions the mod is silent under, so it is the control: anything the mod sets
+        /// differently below the decision tree is a candidate, and anything it sets the same is not.</summary>
+        [Test]
+        public void TheArabyChainFieldByFieldAgainstCathay()
+        {
+            var hircs = new Dictionary<uint, HircItem>();
+            foreach (var packName in new[] { "audio_base_bnk.pack", "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (File.Exists(packPath))
+                    IndexBanks(hircs, VanillaBankReader.ReadMusicBanks(packPath));
+            }
+
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+            IndexBanks(hircs, modPack.GetAllFiles()
+                .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)
+                    && !file.Key.Contains("_for_merging", StringComparison.OrdinalIgnoreCase))
+                .Select(file => (file.Key, file.Value.DataSource.ReadData()))
+                .ToList());
+
+            var container = (CAkMusicSwitchCntr_V136)hircs[698158058];
+
+            foreach (var culture in new[] { "cathay", "araby" })
+            {
+                var key = WwiseHash.Compute(culture);
+                var leaf = container.AkDecisionTree.DecisionTree.Nodes.FirstOrDefault(node => node.Key == key);
+                Console.WriteLine($"\n################ {culture} ################");
+
+                if (leaf == null)
+                {
+                    Console.WriteLine("  no branch");
+                    continue;
+                }
+
+                DumpChainFields(hircs, leaf.AudioNodeId, "  ", 0);
+            }
+        }
+
+        static void DumpChainFields(Dictionary<uint, HircItem> hircs, uint id, string indent, int depth)
+        {
+            if (depth > 4 || !hircs.TryGetValue(id, out var hirc))
+            {
+                Console.WriteLine($"{indent}!! {id} not found");
+                return;
+            }
+
+            switch (hirc)
+            {
+                case CAkMusicRanSeqCntr_V136 ranSeq:
+                    DumpNodeBaseParams($"{indent}RanSeq {id}", ranSeq.MusicTransNodeParams.MusicNodeParams);
+                    foreach (var childId in ranSeq.MusicTransNodeParams.MusicNodeParams.Children.ChildIds)
+                        DumpChainFields(hircs, childId, indent + "  ", depth + 1);
+                    break;
+
+                case CAkMusicSegment_V136 segment:
+                    DumpNodeBaseParams($"{indent}Segment {id}", segment.MusicNodeParams);
+                    Console.WriteLine($"{indent}  duration {segment.Duration:F0}ms, markers " +
+                        string.Join(" | ", segment.ArrayMarkersList.Select(marker => $"{marker.Id}@{marker.Position:F0}'{marker.MarkerName?.Replace("\0", "\\0")}'")));
+                    foreach (var childId in segment.MusicNodeParams.Children.ChildIds)
+                        DumpChainFields(hircs, childId, indent + "  ", depth + 1);
+                    break;
+
+                case CAkMusicTrack_V136 track:
+                    var baseParams = track.NodeBaseParams;
+                    Console.WriteLine($"{indent}Track {id}: bus {baseParams.OverrideBusId}, parent {baseParams.DirectParentId}, " +
+                        $"bitVector {baseParams.BitVector}, overrideAttachment {baseParams.OverrideAttachmentParams}");
+                    Console.WriteLine($"{indent}  trackType {track.TrackType}, lookAhead {track.LookAheadTime}, " +
+                        $"numSubTrack {track.NumSubTrack}");
+                    foreach (var source in track.SourceList)
+                        Console.WriteLine($"{indent}  source {source.AkMediaInformation.SourceId}: {source.StreamType}, " +
+                            $"plugin {source.PluginId}, inMemory {source.AkMediaInformation.InMemoryMediaSize}, " +
+                            $"sourceBits {source.AkMediaInformation.SourceBits}");
+                    foreach (var clip in track.PlaylistList)
+                        Console.WriteLine($"{indent}  clip sub{clip.TrackId} src {clip.SourceId} eventId {clip.EventId} " +
+                            $"playAt {clip.PlayAt:F0} begin {clip.BeginTrimOffset:F0} end {clip.EndTrimOffset:F0} dur {clip.SrcDuration:F0}");
+                    break;
+            }
+        }
+
+        static void DumpNodeBaseParams(string label, MusicNodeParams_V136 musicNodeParams)
+        {
+            var baseParams = musicNodeParams.NodeBaseParams;
+            Console.WriteLine($"{label}: bus {baseParams.OverrideBusId}, parent {baseParams.DirectParentId}, " +
+                $"bitVector {baseParams.BitVector}, overrideAttachment {baseParams.OverrideAttachmentParams}, " +
+                $"flags {musicNodeParams.Flags}, children {musicNodeParams.Children.ChildIds.Count}, " +
+                $"meter {musicNodeParams.MeterInfoFlag}, stingers {musicNodeParams.NumStingers}");
+        }
+
+        /// <summary>The chunks a vanilla music .bnk is made of, against the mod's. A source that
+        /// declares a prefetch has to have somewhere to read it from, and DIDX/DATA is that
+        /// somewhere - so whether vanilla music .bnks carry one decides what the small size means.</summary>
+        [Test]
+        public void WhichChunksVanillaMusicBanksCarry()
+        {
+            foreach (var (path, bytes) in VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack")))
+            {
+                if (!path.EndsWith("global_music__core.bnk") && !path.EndsWith("campaign_music__core.bnk")
+                    && !path.EndsWith("battle_music__core.bnk"))
+                    continue;
+
+                Console.WriteLine($"\n{path} ({bytes.Length} bytes): {string.Join(", ", ReadChunkTags(bytes))}");
+            }
+
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            foreach (var file in VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false).GetAllFiles()
+                .Where(file => file.Key.EndsWith(".bnk"))
+                .OrderBy(file => file.Key))
+            {
+                var bytes = file.Value.DataSource.ReadData();
+                Console.WriteLine($"\n{file.Key} ({bytes.Length} bytes): {string.Join(", ", ReadChunkTags(bytes))}");
+            }
+        }
+
+        /// <summary>The .bnk chunk table, walked by the length each chunk declares.</summary>
+        static List<string> ReadChunkTags(byte[] bytes)
+        {
+            var tags = new List<string>();
+            var offset = 0;
+
+            while (offset + 8 <= bytes.Length)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(bytes, offset, 4);
+                var length = BitConverter.ToUInt32(bytes, offset + 4);
+                tags.Add($"{tag}({length})");
+
+                if (length == 0 || offset + 8 + length > (uint)bytes.Length)
+                    break;
+
+                offset += 8 + (int)length;
+            }
+
+            return tags;
+        }
+
+        /// <summary>What the declared size actually measures, tested against the RIFF layout of the
+        /// wem it names. Vanilla music .bnks carry no DIDX/DATA, so the number cannot be media held
+        /// in the .bnk - the hypothesis under test is that it is the header the game loads before it
+        /// streams the rest, which would make it the offset at which the audio payload starts.</summary>
+        [Test]
+        public void WhatTheDeclaredSizeMeasuresInTheWem()
+        {
+            var wemById = new Dictionary<uint, byte[]>();
+            var wanted = new HashSet<uint>();
+
+            var bank = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(x => x.Path.EndsWith("global_music__core.bnk"));
+
+            var sources = (BnkFile.CreateFromBytes(bank.Bytes, bank.Path, false).HircChunk?.HircItems ?? [])
+                .OfType<CAkMusicTrack_V136>()
+                .SelectMany(track => track.SourceList)
+                .GroupBy(source => source.AkMediaInformation.SourceId)
+                .Select(group => group.First())
+                .Take(8)
+                .ToList();
+
+            foreach (var source in sources)
+                wanted.Add(source.AkMediaInformation.SourceId);
+
+            foreach (var packName in new[] { "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (!File.Exists(packPath))
+                    continue;
+
+                using var vanillaProvider = VanillaBankReader.CreateProvider(GameDirectory);
+                foreach (var file in VanillaBankReader.OpenPack(vanillaProvider, packPath).GetAllFiles())
+                {
+                    if (file.Key.EndsWith(".wem", StringComparison.OrdinalIgnoreCase)
+                        && uint.TryParse(Path.GetFileNameWithoutExtension(file.Key), out var sourceId)
+                        && wanted.Contains(sourceId))
+                        wemById[sourceId] = file.Value.DataSource.ReadData();
+                }
+            }
+
+            foreach (var source in sources)
+            {
+                var sourceId = source.AkMediaInformation.SourceId;
+                if (!wemById.TryGetValue(sourceId, out var bytes))
+                    continue;
+
+                Console.WriteLine($"\nsource {sourceId}: declared {source.AkMediaInformation.InMemoryMediaSize}, wem {bytes.Length}");
+                foreach (var (tag, start, length) in ReadRiffChunks(bytes))
+                    Console.WriteLine($"    {tag} at {start}, {length} bytes, payload starts {start + 8}");
+
+                ReportTheFormula(bytes, source.AkMediaInformation.InMemoryMediaSize);
+            }
+
+            // The mod's own wem, laid out the same way, so the value it should be declaring can be
+            // read straight off it.
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modWem = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false).GetAllFiles()
+                .First(file => file.Key.EndsWith(".wem", StringComparison.OrdinalIgnoreCase));
+
+            var modBytes = modWem.Value.DataSource.ReadData();
+            Console.WriteLine($"\n{modWem.Key}: declared 817726, wem {modBytes.Length}");
+            foreach (var (tag, start, length) in ReadRiffChunks(modBytes))
+                Console.WriteLine($"    {tag} at {start}, {length} bytes, payload starts {start + 8}");
+
+            ReportTheFormula(modBytes, 817726);
+        }
+
+        /// <summary>The candidate rule - everything up to the first audio packet stays resident -
+        /// checked against what the .bnk declares.</summary>
+        static void ReportTheFormula(byte[] wemBytes, uint declared)
+        {
+            var dataChunk = ReadRiffChunks(wemBytes).FirstOrDefault(chunk => chunk.Tag == "data");
+            if (dataChunk.Tag == null)
+                return;
+
+            Shared.GameFormats.Wwise.Wem.V132.WemFile wemFile;
+            try
+            {
+                wemFile = Shared.GameFormats.Wwise.Wem.V132.WemFile.CreateFromWemBytes(wemBytes);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine($"    could not parse the wem: {exception.Message}");
+                return;
+            }
+
+            var dataPayloadStart = (uint)dataChunk.Start + 8;
+            var predicted = dataPayloadStart + wemFile.FmtChunk.FirstAudioPacketOffset;
+
+            Console.WriteLine($"    dataPayloadStart {dataPayloadStart} + firstAudioPacketOffset {wemFile.FmtChunk.FirstAudioPacketOffset}" +
+                $" = {predicted}   (declared {declared}) {(predicted == declared ? "MATCH" : "no")}");
+        }
+
+        /// <summary>The RIFF chunk table of a wem, as (tag, offset of the tag, declared length).</summary>
+        static List<(string Tag, int Start, uint Length)> ReadRiffChunks(byte[] bytes)
+        {
+            var chunks = new List<(string, int, uint)>();
+            var offset = 12;
+
+            while (offset + 8 <= bytes.Length)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(bytes, offset, 4);
+                var length = BitConverter.ToUInt32(bytes, offset + 4);
+                chunks.Add((tag, offset, length));
+
+                if (length == 0 || offset + 8 + (long)length > bytes.Length)
+                    break;
+
+                offset += 8 + (int)length;
+            }
+
+            return chunks;
+        }
+
+        /// <summary>The meter and transition rules every vanilla sibling of the mod's node declares.
+        /// A music transition is scheduled against a musical grid, so a node that declares no meter
+        /// where all of its siblings do is a node the container may never manage to start.</summary>
+        [Test]
+        public void WhatTheVanillaSiblingsDeclareForMeterAndRules()
+        {
+            var hircs = new Dictionary<uint, HircItem>();
+            foreach (var packName in new[] { "audio_base_bnk.pack", "audio_base.pack", "audio_base_m.pack" })
+            {
+                var packPath = Path.Combine(GameDirectory, "data", packName);
+                if (File.Exists(packPath))
+                    IndexBanks(hircs, VanillaBankReader.ReadMusicBanks(packPath));
+            }
+
+            foreach (var containerId in new uint[] { 698158058, 26264058 })
+            {
+                var container = (CAkMusicSwitchCntr_V136)hircs[containerId];
+                Console.WriteLine($"\n################ children of {containerId} ################");
+
+                foreach (var childId in container.MusicTransNodeParams.MusicNodeParams.Children.ChildIds)
+                {
+                    if (!hircs.TryGetValue(childId, out var child) || child is not CAkMusicRanSeqCntr_V136 ranSeq)
+                        continue;
+
+                    var musicNodeParams = ranSeq.MusicTransNodeParams.MusicNodeParams;
+                    Console.WriteLine($"  RanSeq {childId}: meterFlag {musicNodeParams.MeterInfoFlag}, " +
+                        $"rules {ranSeq.MusicTransNodeParams.NumRules}, " +
+                        $"tempo {musicNodeParams.AkMeterInfo?.Tempo}, " +
+                        $"beat {musicNodeParams.AkMeterInfo?.TimeSigBeatValue}/{musicNodeParams.AkMeterInfo?.TimeSigNumBeatsBar}, " +
+                        $"gridPeriod {musicNodeParams.AkMeterInfo?.GridPeriod}, gridOffset {musicNodeParams.AkMeterInfo?.GridOffset}");
+                }
+            }
+
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+            var modHircs = new Dictionary<uint, HircItem>();
+            IndexBanks(modHircs, modPack.GetAllFiles()
+                .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)
+                    && !file.Key.Contains("_for_merging", StringComparison.OrdinalIgnoreCase))
+                .Select(file => (file.Key, file.Value.DataSource.ReadData()))
+                .ToList());
+
+            Console.WriteLine("\n################ the mod's ################");
+            foreach (var ranSeq in modHircs.Values.OfType<CAkMusicRanSeqCntr_V136>())
+            {
+                var musicNodeParams = ranSeq.MusicTransNodeParams.MusicNodeParams;
+                Console.WriteLine($"  RanSeq {ranSeq.Id}: meterFlag {musicNodeParams.MeterInfoFlag}, " +
+                    $"rules {ranSeq.MusicTransNodeParams.NumRules}, " +
+                    $"tempo {musicNodeParams.AkMeterInfo?.Tempo}, " +
+                    $"beat {musicNodeParams.AkMeterInfo?.TimeSigBeatValue}/{musicNodeParams.AkMeterInfo?.TimeSigNumBeatsBar}, " +
+                    $"gridPeriod {musicNodeParams.AkMeterInfo?.GridPeriod}, gridOffset {musicNodeParams.AkMeterInfo?.GridOffset}");
+            }
+
+            Console.WriteLine("\n################ the mod's segments ################");
+            foreach (var segment in modHircs.Values.OfType<CAkMusicSegment_V136>())
+                Console.WriteLine($"  Segment {segment.Id}: meterFlag {segment.MusicNodeParams.MeterInfoFlag}, " +
+                    $"tempo {segment.MusicNodeParams.AkMeterInfo?.Tempo}, gridPeriod {segment.MusicNodeParams.AkMeterInfo?.GridPeriod}");
+        }
+
         /// <summary>What the patched scripts actually say, next to what vanilla says, so the match
         /// key the game compares against is read rather than assumed.</summary>
         [Test]

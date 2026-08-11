@@ -33,6 +33,7 @@ namespace Editors.Audio.Shared.Wwise.Generators.Hirc.V136
             nodeParams.AkMeterInfo.Tempo = randomSequence.Tempo;
             nodeParams.AkMeterInfo.TimeSigNumBeatsBar = 4;
             nodeParams.AkMeterInfo.TimeSigBeatValue = 4;
+            nodeParams.AkMeterInfo.GridPeriod = Wh3MusicHierarchyInformation.DefaultGridPeriod;
 
             foreach (var segment in randomSequence.Segments)
                 nodeParams.Children.ChildIds.Add(segment.SegmentId);

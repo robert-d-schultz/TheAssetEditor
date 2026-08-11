@@ -47,6 +47,7 @@ namespace Editors.Audio.Shared.Wwise.Generators.Hirc.V136
             musicNodeParams.AkMeterInfo.Tempo = musicSegment.Tempo;
             musicNodeParams.AkMeterInfo.TimeSigNumBeatsBar = 4;
             musicNodeParams.AkMeterInfo.TimeSigBeatValue = 4;
+            musicNodeParams.AkMeterInfo.GridPeriod = Wh3MusicHierarchyInformation.DefaultGridPeriod;
 
             return musicNodeParams;
         }

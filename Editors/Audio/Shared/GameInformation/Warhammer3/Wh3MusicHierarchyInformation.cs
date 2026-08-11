@@ -140,6 +140,21 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         /// <summary>The named cue's name, which is stored null terminated on disk.</summary>
         public const string CustomCueName = "Update_PreBattle\0";
 
+        /// <summary>
+        /// The musical grid a music transition is scheduled against, in milliseconds.
+        ///
+        /// This is not decoration. A transition into a node is timed against its grid, so a node
+        /// that declares a period of zero gives Wwise no point in time to make the switch on and
+        /// simply never starts - the container selects the branch and nothing is heard.
+        ///
+        /// Every vanilla child of the containers this touches carries a non-zero period. The ones
+        /// that override the meter derive it from their tempo (four bars: four times the beats in a
+        /// bar, at 60000/tempo per beat, scaled by the beat value); the ones that do not override it
+        /// carry Wwise's own default of 1000 instead. Nothing here knows the tempo of the wav a
+        /// modder supplies, so it does not override the meter, and takes the default with it.
+        /// </summary>
+        public const double DefaultGridPeriod = 1000;
+
         /// <summary>Vorbis. Every vanilla music source uses it, and it is what the compiler encodes
         /// wavs to, so a generated track has to declare the same plugin.</summary>
         public const uint VorbisPluginId = 262145;

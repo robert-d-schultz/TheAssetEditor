@@ -57,6 +57,37 @@ namespace Test.Audio
             });
         }
 
+        // A transition into a node is scheduled against that node's musical grid, so a grid period of
+        // zero leaves Wwise nothing to make the switch on and the node never starts - the branch is
+        // selected and nothing is heard. Every vanilla child of the two containers this touches
+        // declares a non-zero period, and the ones that do not override the meter declare Wwise's
+        // default of 1000. These two pin that down at both levels of the hierarchy.
+        [Test]
+        public void GeneratedSegmentDeclaresAPlayableMusicalGrid()
+        {
+            var segment = (CAkMusicSegment_V136)new CAkMusicSegmentGenerator_V136().GenerateHirc(CreateMusicSegment());
+            var meterInfo = segment.MusicNodeParams.AkMeterInfo;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(meterInfo.GridPeriod, Is.EqualTo(Wh3MusicHierarchyInformation.DefaultGridPeriod));
+                Assert.That(meterInfo.GridPeriod, Is.GreaterThan(0), "a zero grid period is silent rather than an error");
+            });
+        }
+
+        [Test]
+        public void GeneratedRandomSequenceDeclaresAPlayableMusicalGrid()
+        {
+            var ranSeq = (CAkMusicRanSeqCntr_V136)new CAkMusicRanSeqCntrGenerator_V136().GenerateHirc(CreateRandomSequence(SegmentId));
+            var meterInfo = ranSeq.MusicTransNodeParams.MusicNodeParams.AkMeterInfo;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(meterInfo.GridPeriod, Is.EqualTo(Wh3MusicHierarchyInformation.DefaultGridPeriod));
+                Assert.That(meterInfo.GridPeriod, Is.GreaterThan(0), "a zero grid period is silent rather than an error");
+            });
+        }
+
         [Test]
         public void GeneratedTrackNamesTheAudioAsAStreamedVorbisSource()
         {
