@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="Editors.Audio.csproj" />
+    <ProjectReference Include="..\MusicDatEditor\Editors.MusicDatEditor.csproj" />
   </ItemGroup>
 
   <ItemGroup>
