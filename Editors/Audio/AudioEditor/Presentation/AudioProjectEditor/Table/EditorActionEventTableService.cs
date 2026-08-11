@@ -66,10 +66,14 @@ namespace Editors.Audio.AudioEditor.Presentation.AudioProjectEditor.Table
             }
             else
             {
+                // Music Action Events set a State rather than playing a Sound, so their names don't
+                // take the Play_ prefix that the rest of the Action Events do.
+                var forcePlayPrefix = !_audioEditorStateService.SelectedAudioProjectExplorerNode.IsMusicActionEvent();
+
                 foreach (var columnName in schema)
                 {
                     var eventColumn = DataGridTemplates.CreateColumnTemplate(columnName, columnWidth);
-                    eventColumn.CellTemplate = DataGridTemplates.CreateEditableEventTextBoxTemplate(_eventHub, columnName);
+                    eventColumn.CellTemplate = DataGridTemplates.CreateEditableEventTextBoxTemplate(_eventHub, columnName, forcePlayPrefix);
                     _eventHub.Publish(new EditorDataGridColumnAddRequestedEvent(eventColumn));
                 }
             }
@@ -79,7 +83,8 @@ namespace Editors.Audio.AudioEditor.Presentation.AudioProjectEditor.Table
         {
             var eventName = string.Empty;
 
-            if (!_audioEditorStateService.SelectedAudioProjectExplorerNode.IsMovieActionEvent())
+            var node = _audioEditorStateService.SelectedAudioProjectExplorerNode;
+            if (!node.IsMovieActionEvent() && !node.IsMusicActionEvent())
                 eventName = "Play_";
 
             var row = editorTable.NewRow();
