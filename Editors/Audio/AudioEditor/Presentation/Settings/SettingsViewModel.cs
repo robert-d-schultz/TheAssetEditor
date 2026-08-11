@@ -243,6 +243,12 @@ namespace Editors.Audio.AudioEditor.Presentation.Settings
             if (!selectedAudioProjectExplorerNode.IsDialogueEvent() && !selectedAudioProjectExplorerNode.IsActionEvent())
                 return;
 
+            // A music Action Event sets a State rather than playing a Sound, so there is nothing
+            // here for it to configure - no container, no playlist, no looping, no transitions.
+            // Leaving the panel hidden is the same treatment State Groups get above.
+            if (selectedAudioProjectExplorerNode.IsMusicActionEvent())
+                return;
+
             IsSettingsVisible = true;
 
             if (AudioFiles.Count > 1)
@@ -396,6 +402,19 @@ namespace Editors.Audio.AudioEditor.Presentation.Settings
             var audioFiles = new List<AudioFile>();
 
             var selectedAudioProjectExplorerNode = _audioEditorStateService.SelectedAudioProjectExplorerNode;
+
+            // A music Action Event holds a SetState action and no play action, so there are no
+            // settings to read off it - GetActionEventSettings would leave hircSettings null and
+            // the next call would dereference it. The audio file list is still cleared rather
+            // than left alone, so a previously selected event's wavs are not shown as though they
+            // belonged to this row.
+            if (selectedAudioProjectExplorerNode.IsMusicActionEvent())
+            {
+                SetAudioFilesFromViewerItem(isRowEdited, audioFiles);
+                SetSettingsUsability();
+                return;
+            }
+
             if (selectedAudioProjectExplorerNode.IsActionEvent())
                 GetActionEventSettings(ref hircSettings, ref audioFiles);
             else if (selectedAudioProjectExplorerNode.IsDialogueEvent())
