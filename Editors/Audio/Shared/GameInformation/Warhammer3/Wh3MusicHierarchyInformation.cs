@@ -29,12 +29,36 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         /// The Music Switch container whose decision tree branches on a given State Group, keyed by
         /// State Group name. These are vanilla hirc ids, so a merge has to re-emit the whole
         /// container the way the Dialogue Event merge re-emits a whole dialogue event.
+        ///
+        /// Only State Groups a single keyed node can serve are listed. Every Music Switch container
+        /// in the game was enumerated with MusicEventShapeResearch.DumpEveryMusicSwitchContainer, and
+        /// of the six State Groups the music events target, exactly one qualifies:
+        ///
+        ///   WH3_Campaign_Subcultures                     698158058, depth 1  -> listed
+        ///   WH3_Campaign_Subcultures                     145953291, depth 2  (+ Resolution_State)
+        ///   Battle_Music_WH3_Culture                     26264058,  depth 2  (+ Battle_Result_State)
+        ///   Battle_Music_WH3_Culture                     67383790,  depth 6
+        ///   WH3_Campaign_Music_AMS_Fragments_Faction     no container branches on it
+        ///   WH3_AMS_Pulse_Percussion_Options             no container branches on it
+        ///   WH3_AMS_Pulse_Pitched_Orchestral_Options     no container branches on it
+        ///   WH3_AMS_Pulse_Pitched_Ethnic_Options         no container branches on it
+        ///
+        /// The four with no container are not unused - they are the adaptive music system, and are
+        /// read by switch tracks inside the music rather than by a decision tree. Serving those means
+        /// generating switch track params, not merging a branch, which is a different job entirely.
         /// </summary>
         public static uint? GetMusicSwitchContainerId(string stateGroupName) => stateGroupName switch
         {
             "WH3_Campaign_Subcultures" => 698158058,
             _ => null
         };
+
+        /// <summary>
+        /// Whether a mod can give a State Group's States their own audio by merging a branch. False
+        /// means an Action Event setting one of its States still works and still fires, but has to
+        /// select music that already exists rather than bring its own.
+        /// </summary>
+        public static bool CanCarryOwnAudio(string stateGroupName) => GetMusicSwitchContainerId(stateGroupName) != null;
 
         /// <summary>
         /// Cue markers. Every vanilla music segment carries these same three ids: an entry cue at

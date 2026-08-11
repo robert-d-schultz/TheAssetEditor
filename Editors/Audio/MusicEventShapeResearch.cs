@@ -82,6 +82,33 @@ namespace Test.Audio
             // so this walks a couple of vanilla branches end to end as the template to generate.
             DumpMusicSwitchBranches(repository, 698158058, "WH3_Campaign_Subcultures");
             DumpMusicSwitchBranches(repository, 26264058, "Battle_Music_WH3_Culture");
+
+            DumpEveryMusicSwitchContainer(repository);
+        }
+
+        /// <summary>
+        /// Every Music Switch container in the game with the State Groups it branches on. The wizard
+        /// emits events against six State Groups and a State only plays anything if the container
+        /// branching on that Group gets a branch merged in, so this is what says which of the six can
+        /// be served at all - and which are too deep for a single keyed node to be a branch.
+        /// </summary>
+        static void DumpEveryMusicSwitchContainer(IAudioRepository repository)
+        {
+            TestContext.Out.WriteLine("=== every MusicSwitch container ===");
+
+            foreach (var hircItem in repository.GetHircs(AkBkHircType.Music_Switch).Where(hirc => hirc.IsCA))
+            {
+                if (hircItem is not CAkMusicSwitchCntr_V136 container)
+                    continue;
+
+                var argumentNames = container.Arguments
+                    .Select(argument => $"{argument.GroupType}:{repository.GetNameFromId(argument.GroupId)}");
+
+                TestContext.Out.WriteLine(
+                    $"  id={container.Id} depth={container.TreeDepth} mode={container.Mode} " +
+                    $"branches={container.AkDecisionTree.DecisionTree.Nodes.Count} " +
+                    $"args=[{string.Join(", ", argumentNames)}] bnk={Path.GetFileName(container.BnkFilePath)}");
+            }
         }
 
         static void DumpMusicSwitchBranches(IAudioRepository repository, uint switchContainerId, string label)

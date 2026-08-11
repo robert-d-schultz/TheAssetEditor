@@ -87,7 +87,9 @@ namespace Editors.MusicDatEditor.ViewModels
         public string AudioProjectHelp =>
             "Creates an audio project holding one Music event per row above, built the way vanilla " +
             "builds them: each event sets a Wwise State naming this culture, rather than playing a " +
-            "file directly. Open it in the Audio Editor to compile it, or to add more events by hand.";
+            "file directly. Open it in the Audio Editor to attach audio and compile it, or to add " +
+            "more events by hand. Only rows marked as able to carry their own audio can be given " +
+            "files there - see the note on each row.";
 
         public string MissingFileWarning =>
             _battle == null ? "battle_music.dat could not be found in this pack, so only the campaign wiring will be added." :

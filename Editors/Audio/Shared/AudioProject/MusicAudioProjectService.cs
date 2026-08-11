@@ -22,10 +22,14 @@ namespace Editors.Audio.Shared.AudioProject
     ///
     /// A vanilla music event is a single SetState action against one of the music State Groups -
     /// music_b_faction_empire sets Battle_Music_WH3_Culture to Empire - and holds no Sound, no
-    /// container and no audio file. What actually makes a State audible is the music hierarchy
-    /// branching on it, which lives in the game's own banks; the event's whole job is to select a
-    /// branch. So this generates events and the States they select, and nothing else: there is no
-    /// placeholder audio to attach because an event of this kind has nowhere to attach it.
+    /// container and no audio file. What makes a State audible is the music hierarchy branching on
+    /// it, which lives in the game's own banks; the event's whole job is to select a branch.
+    ///
+    /// So this generates the events and the States they select and stops there. The audio comes
+    /// later, in the Audio Editor, where picking wavs for an event builds the branch its State
+    /// selects - and only for State Groups a mod can actually extend, which of the six these events
+    /// target is just WH3_Campaign_Subcultures. See
+    /// <see cref="Wh3MusicHierarchyInformation.GetMusicSwitchContainerId"/> for why.
     /// </summary>
     public interface IMusicAudioProjectService
     {

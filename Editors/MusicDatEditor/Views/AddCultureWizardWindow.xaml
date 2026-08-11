@@ -78,7 +78,9 @@
                                 <TextBlock Text="{Binding Description}" TextWrapping="Wrap"
                                            FontSize="11" Opacity="0.8" Margin="20,4,0,2"/>
                                 <TextBlock Text="{Binding EventInfo}" TextWrapping="Wrap"
-                                           FontSize="11" Opacity="0.9" FontFamily="Consolas" Margin="20,2,0,6"/>
+                                           FontSize="11" Opacity="0.9" FontFamily="Consolas" Margin="20,2,0,2"/>
+                                <TextBlock Text="{Binding AudioSupportNote}" TextWrapping="Wrap"
+                                           FontSize="11" Opacity="0.8" Margin="20,0,0,6"/>
 
                                 <StackPanel Margin="20,0,0,0" Orientation="Horizontal" IsEnabled="{Binding Include}">
                                     <CheckBox IsChecked="{Binding UseExistingAudio}"

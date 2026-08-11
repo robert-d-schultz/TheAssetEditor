@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Editors.Audio.Shared.GameInformation.Warhammer3;
 using Shared.GameFormats.MusicDat;
 
 namespace Editors.MusicDatEditor.ViewModels
@@ -32,6 +33,26 @@ namespace Editors.MusicDatEditor.ViewModels
         public string Scope => Slot.InsertionCount == 1
             ? "Patches 1 place."
             : $"Patches {Slot.InsertionCount} places (the chain is repeated per randomised variant).";
+
+        /// <summary>
+        /// Whether this row's event can be given music of its own, or can only select music that
+        /// already exists. An event sets a Wwise State, and a State only reaches new audio if the
+        /// Music Switch container branching on its State Group can take a branch. Every container in
+        /// the game was enumerated to establish this - see
+        /// <see cref="Wh3MusicHierarchyInformation.GetMusicSwitchContainerId"/> - and only the
+        /// campaign subculture slot qualifies. The rest still work as wiring; they just cannot bring
+        /// their own files, so saying nothing here would let a modder spend an evening picking wavs
+        /// that can never be reached.
+        /// </summary>
+        public bool CanCarryOwnAudio =>
+            Wh3MusicEventInformation.TryResolveStateTarget(Slot.EventFor("placeholder"), out var stateGroupName, out _)
+            && Wh3MusicHierarchyInformation.CanCarryOwnAudio(stateGroupName);
+
+        public string AudioSupportNote => CanCarryOwnAudio
+            ? "Audio can be added to this event in the Audio Editor."
+            : "This event can only select music that already exists - the Audio Editor cannot give it " +
+              "files of its own, because nothing in the game branches on its State Group in a way a " +
+              "mod can extend. Point it at an existing culture's music instead.";
 
         public CultureSlotViewModel(MusicDatCultureWiring.CultureSlot slot, Action changed)
         {
