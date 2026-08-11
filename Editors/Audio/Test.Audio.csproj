@@ -26,6 +26,7 @@
     <Compile Include="MusicActionEventIntegrityTests.cs" />
     <Compile Include="MusicAudioProjectServiceTests.cs" />
     <Compile Include="MusicEventShapeResearch.cs" />
+    <Compile Include="MusicHierarchyFactoryTests.cs" />
     <Compile Include="MusicHierarchyGenerationTests.cs" />
     <Compile Include="MusicSwitchContainerMergeTests.cs" />
     <Compile Include="MusicHircRoundTripResearch.cs" />

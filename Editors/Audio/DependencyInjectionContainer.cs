@@ -118,6 +118,7 @@ namespace Editors.Audio
             serviceCollection.AddSingleton<IRandomSequenceContainerFactory, RandomSequenceContainerFactory>();
             serviceCollection.AddSingleton<IActionEventFactory, ActionEventFactory>();
             serviceCollection.AddSingleton<IStatePathFactory, StatePathFactory>();
+            serviceCollection.AddSingleton<IMusicHierarchyFactory, MusicHierarchyFactory>();
             serviceCollection.AddScoped<IMusicAudioProjectService, MusicAudioProjectService>();
             serviceCollection.AddScoped<IActionEventService, ActionEventService>();
             serviceCollection.AddScoped<IDialogueEventService, DialogueEventService>();

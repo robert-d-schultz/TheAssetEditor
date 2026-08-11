@@ -19,6 +19,7 @@ using Editors.Audio.Shared.AudioProject.Models;
 using Editors.Audio.Shared.Storage;
 using Editors.Audio.Shared.Wwise;
 using Shared.Core.Events;
+using Shared.GameFormats.Wwise.Enums;
 using HircSettings = Editors.Audio.Shared.AudioProject.Models.HircSettings;
 
 namespace Editors.Audio.AudioEditor.Presentation.Settings
@@ -405,11 +406,11 @@ namespace Editors.Audio.AudioEditor.Presentation.Settings
 
             // A music Action Event holds a SetState action and no play action, so there are no
             // settings to read off it - GetActionEventSettings would leave hircSettings null and
-            // the next call would dereference it. The audio file list is still cleared rather
-            // than left alone, so a previously selected event's wavs are not shown as though they
-            // belonged to this row.
+            // the next call would dereference it. Its audio hangs off the branch the State selects
+            // rather than off the Event, so it is looked up separately.
             if (selectedAudioProjectExplorerNode.IsMusicActionEvent())
             {
+                GetMusicActionEventAudioFiles(ref audioFiles);
                 SetAudioFilesFromViewerItem(isRowEdited, audioFiles);
                 SetSettingsUsability();
                 return;
@@ -498,6 +499,40 @@ namespace Editors.Audio.AudioEditor.Presentation.Settings
                     var randomSequenceContainer = soundBank.GetRandomSequenceContainer(playAction.TargetHircId);
                     hircSettings = randomSequenceContainer.HircSettings;
                     audioFiles = _audioEditorStateService.AudioProject.GetAudioFiles(soundBank, randomSequenceContainer);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The audio under the branch the selected music Event's State selects. Nothing comes back
+        /// when no branch exists yet, which is the case for an Event added to set a State some other
+        /// Event's branch already covers.
+        /// </summary>
+        private void GetMusicActionEventAudioFiles(ref List<AudioFile> audioFiles)
+        {
+            var selectedViewerRow = _audioEditorStateService.SelectedViewerRows[0];
+            var soundBankName = _audioEditorStateService.SelectedAudioProjectExplorerNode.GetParentSoundBankNode().Name;
+            var soundBank = _audioEditorStateService.AudioProject.GetSoundBank(soundBankName);
+            var actionEventName = TableHelpers.GetActionEventNameFromRow(selectedViewerRow);
+            var actionEvent = _audioEditorStateService.AudioProject.GetActionEvent(actionEventName);
+
+            var stateNames = actionEvent.Actions
+                .Where(action => action.ActionType == AkActionType.SetState)
+                .Select(action => action.StateName);
+
+            foreach (var stateName in stateNames)
+            {
+                var musicRandomSequence = soundBank.MusicRandomSequences
+                    .FirstOrDefault(randomSequence => randomSequence.StateName == stateName);
+
+                if (musicRandomSequence == null)
+                    continue;
+
+                foreach (var musicSegment in soundBank.GetMusicSegments(musicRandomSequence))
+                {
+                    var audioFile = _audioEditorStateService.AudioProject.GetAudioFile(musicSegment.SourceId);
+                    if (audioFile != null)
+                        audioFiles.Add(audioFile);
                 }
             }
         }

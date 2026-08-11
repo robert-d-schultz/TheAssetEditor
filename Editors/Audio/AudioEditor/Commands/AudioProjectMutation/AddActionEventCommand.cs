@@ -34,7 +34,7 @@ namespace Editors.Audio.AudioEditor.Commands.AudioProjectMutation
             {
                 var stateGroupName = TableHelpers.GetValueFromRow(_row, TableInformation.StateGroupColumnName);
                 var stateName = TableHelpers.GetStateNameFromRow(_row);
-                _actionEventService.AddSetStateActionEvent(actionEventTypeName, actionEventName, stateGroupName, stateName);
+                _actionEventService.AddSetStateActionEvent(actionEventTypeName, actionEventName, stateGroupName, stateName, audioFiles);
                 return;
             }
 

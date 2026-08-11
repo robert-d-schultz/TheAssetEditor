@@ -8,6 +8,7 @@ using Editors.Audio.Shared.AudioProject.Factories;
 using Editors.Audio.Shared.AudioProject.Models;
 using Editors.Audio.Shared.GameInformation.Warhammer3;
 using Editors.Audio.Shared.Storage;
+using Shared.GameFormats.Wwise.Enums;
 using HircSettings = Editors.Audio.Shared.AudioProject.Models.HircSettings;
 
 namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
@@ -15,16 +16,23 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
     public interface IActionEventService
     {
         void AddPlayActionEvent(string actionEventTypeName, string actionEventName, List<AudioFile> audioFiles, HircSettings hircSettings);
-        void AddSetStateActionEvent(string actionEventTypeName, string actionEventName, string stateGroupName, string stateName);
+        void AddSetStateActionEvent(string actionEventTypeName, string actionEventName, string stateGroupName, string stateName, List<AudioFile> audioFiles);
         void AddPauseResumeStopActionEvent(string actionEventTypeName, string actionEventName);
         void RemoveActionEvent(string actionEventNodeName, string actionEventName);
     }
 
-    public class ActionEventService(IAudioEditorStateService audioEditorStateService, IAudioRepository audioRepository, IActionEventFactory actionEventFactory) : IActionEventService
+    public class ActionEventService(
+        IAudioEditorStateService audioEditorStateService,
+        IAudioRepository audioRepository,
+        IActionEventFactory actionEventFactory,
+        IMusicHierarchyFactory musicHierarchyFactory) : IActionEventService
     {
         private readonly IAudioEditorStateService _audioEditorStateService = audioEditorStateService;
         private readonly IAudioRepository _audioRepository = audioRepository;
         private readonly IActionEventFactory _actionEventFactory = actionEventFactory;
+        private readonly IMusicHierarchyFactory _musicHierarchyFactory = musicHierarchyFactory;
+
+        private readonly ILogger _logger = Logging.Create<ActionEventService>();
 
         public void AddPlayActionEvent(string actionEventTypeName, string actionEventName, List<AudioFile> audioFiles, HircSettings hircSettings)
         {
@@ -79,12 +87,14 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
         }
 
         /// <summary>
-        /// A music Action Event, which sets a State instead of playing a Sound. There are no target
-        /// objects to register - no Sound, no container, no audio file - so unlike the Play case
-        /// this only has to add the Event itself, and the State it points at is added to the
-        /// project's State Group so it shows up in the Audio Explorer.
+        /// A music Action Event, which sets a State instead of playing a Sound. The Event itself has
+        /// no target objects, but setting a State only makes noise if the vanilla Music Switch
+        /// container has a branch for it - so the audio picked in the Audio Files Explorer becomes
+        /// the hierarchy under that branch rather than a Sound the Event points at.
+        ///
+        /// The State is also added to the project's State Group so it shows up in the Audio Explorer.
         /// </summary>
-        public void AddSetStateActionEvent(string actionEventTypeName, string actionEventName, string stateGroupName, string stateName)
+        public void AddSetStateActionEvent(string actionEventTypeName, string actionEventName, string stateGroupName, string stateName, List<AudioFile> audioFiles)
         {
             var usedHircIds = IdGenerator.GetUsedHircIds(_audioRepository, _audioEditorStateService.AudioProject);
 
@@ -98,6 +108,69 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
             soundBank.ActionEvents.InsertAlphabetically(result.ActionEvent);
 
             AddStateToStateGroup(stateGroupName, stateName);
+            AddMusicBranch(soundBank, stateGroupName, stateName, audioFiles, usedHircIds);
+        }
+
+        /// <summary>
+        /// The hierarchy the State selects. Nothing is added when no audio was picked - the Event is
+        /// still worth having on its own, since it can set a State a branch added earlier already
+        /// covers.
+        /// </summary>
+        private void AddMusicBranch(SoundBank soundBank, string stateGroupName, string stateName, List<AudioFile> audioFiles, HashSet<uint> usedHircIds)
+        {
+            if (audioFiles == null || audioFiles.Count == 0)
+                return;
+
+            var musicSwitchContainerId = Wh3MusicHierarchyInformation.GetMusicSwitchContainerId(stateGroupName);
+            if (musicSwitchContainerId == null)
+            {
+                _logger.Here().Error($"State Group {stateGroupName} has no known Music Switch container, so its audio cannot be reached and was not added");
+                return;
+            }
+
+            // A branch per State. Picking more audio for a State that already has one extends its
+            // playlist rather than starting a second branch, since the decision tree can only point
+            // at one place.
+            var existingRandomSequence = soundBank.MusicRandomSequences
+                .FirstOrDefault(musicRandomSequence => musicRandomSequence.StateName == stateName);
+
+            if (existingRandomSequence != null)
+            {
+                var addedSegments = _musicHierarchyFactory
+                    .CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateName, audioFiles, soundBank.Language)
+                    .MusicSegments;
+
+                foreach (var musicSegment in addedSegments)
+                {
+                    musicSegment.DirectParentId = existingRandomSequence.Id;
+                    existingRandomSequence.Segments.Add(new MusicPlaylistEntry
+                    {
+                        SegmentId = musicSegment.Id,
+                        PlaylistItemId = existingRandomSequence.PlaylistRootItemId + existingRandomSequence.Segments.Count + 1
+                    });
+                }
+
+                AddMusicSegments(soundBank, addedSegments, audioFiles);
+                return;
+            }
+
+            var branch = _musicHierarchyFactory.CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateName, audioFiles, soundBank.Language);
+            soundBank.MusicRandomSequences.Add(branch.MusicRandomSequence);
+            AddMusicSegments(soundBank, branch.MusicSegments, audioFiles);
+        }
+
+        private void AddMusicSegments(SoundBank soundBank, List<MusicSegment> musicSegments, List<AudioFile> audioFiles)
+        {
+            foreach (var musicSegment in musicSegments)
+            {
+                soundBank.MusicSegments.Add(musicSegment);
+
+                if (_audioEditorStateService.AudioProject.GetAudioFile(musicSegment.SourceId) == null)
+                {
+                    var audioFile = audioFiles.FirstOrDefault(audioFile => audioFile.Id == musicSegment.SourceId);
+                    _audioEditorStateService.AudioProject.AudioFiles.TryAdd(audioFile);
+                }
+            }
         }
 
         private void AddStateToStateGroup(string stateGroupName, string stateName)
@@ -147,6 +220,46 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
             }
         }
 
+        /// <summary>
+        /// The hierarchy a removed music Event's State selected. Another Event can set the same
+        /// State, so the branch only goes when nothing is left pointing at it - otherwise removing
+        /// one of two Events would silence both.
+        /// </summary>
+        private void RemoveMusicBranch(SoundBank soundBank, ActionEvent actionEvent)
+        {
+            var stateNames = actionEvent.Actions
+                .Where(action => action.ActionType == AkActionType.SetState)
+                .Select(action => action.StateName)
+                .ToList();
+
+            foreach (var stateName in stateNames)
+            {
+                var stillSet = soundBank.ActionEvents
+                    .Any(otherActionEvent => otherActionEvent.Actions
+                        .Any(action => action.ActionType == AkActionType.SetState && action.StateName == stateName));
+
+                if (stillSet)
+                    continue;
+
+                var musicRandomSequence = soundBank.MusicRandomSequences
+                    .FirstOrDefault(randomSequence => randomSequence.StateName == stateName);
+
+                if (musicRandomSequence == null)
+                    continue;
+
+                foreach (var musicSegment in soundBank.GetMusicSegments(musicRandomSequence))
+                {
+                    soundBank.MusicSegments.Remove(musicSegment);
+
+                    var audioFile = _audioEditorStateService.AudioProject.GetAudioFile(musicSegment.SourceId);
+                    if (audioFile != null && audioFile.Sounds.Count == 0)
+                        _audioEditorStateService.AudioProject.AudioFiles.Remove(audioFile);
+                }
+
+                soundBank.MusicRandomSequences.Remove(musicRandomSequence);
+            }
+        }
+
         public void RemoveActionEvent(string actionEventNodeName, string actionEventName)
         {
             var gameSoundBankName = Wh3SoundBankInformation.GetName(Wh3ActionEventInformation.GetSoundBank(actionEventNodeName));
@@ -173,6 +286,8 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                 
                 return;
             }
+
+            RemoveMusicBranch(soundBank, actionEvent);
 
             foreach (var action in actionEvent.Actions)
             {
