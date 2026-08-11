@@ -17,6 +17,10 @@ namespace Editors.Audio.Shared.AudioProject.Models
         /// <see cref="GameInformation.Warhammer3.Wh3MusicHierarchyInformation.GetMusicSwitchContainerId"/>.</summary>
         public uint DirectParentId { get; set; }
 
+        /// <summary>The State that selects this branch - the same State the Action Event sets. The
+        /// decision tree node is keyed on its hash.</summary>
+        public string StateName { get; set; }
+
         /// <summary>Zero to inherit the bus, which is what almost every vanilla branch does.</summary>
         public uint OverrideBusId { get; set; }
 

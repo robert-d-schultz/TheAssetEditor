@@ -51,7 +51,20 @@ namespace Editors.Audio.Shared.Wwise.Generators
             // replaces it, which is what a modder replacing a culture's music is asking for.
             var mergedTree = AkDecisionTree_V136.MergeDecisionTrees(moddedRoot, vanillaDecisionTree);
 
-            var mergedContainer = vanillaContainer;
+            // A new container rather than the one passed in. The vanilla hirc belongs to the audio
+            // repository and is shared with everything else reading vanilla data, so merging must
+            // not edit it in place.
+            var mergedContainer = new CAkMusicSwitchCntr_V136
+            {
+                Id = vanillaContainer.Id,
+                HircType = vanillaContainer.HircType,
+                MusicTransNodeParams = vanillaContainer.MusicTransNodeParams,
+                IsContinuePlayback = vanillaContainer.IsContinuePlayback,
+                TreeDepth = vanillaContainer.TreeDepth,
+                Arguments = [.. vanillaContainer.Arguments],
+                Mode = vanillaContainer.Mode
+            };
+
             mergedContainer.AkDecisionTree = new AkDecisionTree_V136
             {
                 DecisionTree = mergedTree,

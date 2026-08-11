@@ -25,6 +25,14 @@ namespace Editors.Audio.Shared.AudioProject.Models
         public List<Sound> Sounds { get; set; } = [];
         public List<RandomSequenceContainer> RandomSequenceContainers { get; set; } = [];
 
+        /// <summary>
+        /// The music hierarchy this bank contributes. Music is not reached through a Play action
+        /// like everything else here - an Action Event sets a State, and these are what the vanilla
+        /// decision tree selects once a branch for that State has been merged in.
+        /// </summary>
+        public List<MusicRandomSequence> MusicRandomSequences { get; set; } = [];
+        public List<MusicSegment> MusicSegments { get; set; } = [];
+
         public SoundBank(string name, Wh3SoundBank gameSoundBank, string language)
         {
             Id = WwiseHash.Compute(name);
@@ -61,7 +69,9 @@ namespace Editors.Audio.Shared.AudioProject.Models
                 DialogueEvents = cleanedDialogueEvents,
                 ActionEvents = cleanedActionEvents,
                 Sounds = Sounds.ToList(),
-                RandomSequenceContainers = RandomSequenceContainers.ToList()
+                RandomSequenceContainers = RandomSequenceContainers.ToList(),
+                MusicRandomSequences = MusicRandomSequences.ToList(),
+                MusicSegments = MusicSegments.ToList()
             };
         }
 
@@ -109,6 +119,16 @@ namespace Editors.Audio.Shared.AudioProject.Models
         public RandomSequenceContainer GetRandomSequenceContainer(uint id)
         {
             return RandomSequenceContainers.FirstOrDefault(randomSequenceContainer => randomSequenceContainer.Id == id);
+        }
+
+        public MusicSegment GetMusicSegment(uint id) => MusicSegments.FirstOrDefault(musicSegment => musicSegment.Id == id);
+
+        public List<MusicSegment> GetMusicSegments(MusicRandomSequence musicRandomSequence)
+        {
+            return musicRandomSequence.Segments
+                .Select(entry => GetMusicSegment(entry.SegmentId))
+                .Where(musicSegment => musicSegment != null)
+                .ToList();
         }
     }
 

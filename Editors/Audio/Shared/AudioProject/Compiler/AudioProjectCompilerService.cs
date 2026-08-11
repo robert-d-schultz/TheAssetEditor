@@ -7,6 +7,7 @@ using Editors.Audio.Shared.Storage;
 using Editors.Audio.Shared.Wwise.Generators;
 using Shared.Core.Misc;
 using Shared.GameFormats.Wwise;
+using Shared.GameFormats.Wwise.Wem.V132;
 
 namespace Editors.Audio.Shared.AudioProject.Compiler
 {
@@ -106,6 +107,24 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
 
                 if (soundBank.DialogueEvents.Count != 0)
                     SetDialogueEventData(audioProject, audioFiles, sounds, soundBank);
+
+                if (soundBank.MusicSegments.Count != 0)
+                    SetMusicData(audioProject, audioFiles, soundBank);
+            }
+        }
+
+        // Music segments carry their audio directly rather than through a Sound, so they need the
+        // same wem paths setting but have no Sound to add alongside.
+        private static void SetMusicData(AudioProjectFile audioProject, List<AudioFile> audioFiles, SoundBank soundBank)
+        {
+            foreach (var musicSegment in soundBank.MusicSegments)
+            {
+                var audioFile = audioProject.GetAudioFile(musicSegment.SourceId);
+                if (audioFile == null)
+                    continue;
+
+                SetSoundData(audioFile, soundBank);
+                audioFiles.Add(audioFile);
             }
         }
 
@@ -202,6 +221,32 @@ namespace Editors.Audio.Shared.AudioProject.Compiler
                 _wemGeneratorService.GenerateWems(audioFiles);
                 _wemGeneratorService.SaveWemsToPack(audioFiles);
                 UpdateSoundInMemoryMediaSize(audioProject, sounds);
+                UpdateMusicSegmentAudioData(audioProject);
+            }
+        }
+
+        /// <summary>
+        /// A music segment's duration has to match its audio: it sets the segment length, the exit
+        /// cue position and the clip's source duration, and a wrong value desynchronises the segment
+        /// from the file rather than failing. The encoded wem is the authority - it is what ships -
+        /// so the sample count and rate are read back out of it rather than off the source wav.
+        /// </summary>
+        private static void UpdateMusicSegmentAudioData(AudioProjectFile audioProject)
+        {
+            foreach (var soundBank in audioProject.SoundBanks)
+            {
+                foreach (var musicSegment in soundBank.MusicSegments)
+                {
+                    var audioFile = audioProject.GetAudioFile(musicSegment.SourceId);
+                    if (audioFile == null || !File.Exists(audioFile.WemDiskFilePath))
+                        continue;
+
+                    var wemBytes = File.ReadAllBytes(audioFile.WemDiskFilePath);
+                    var wemFile = WemFile.CreateFromWemBytes(wemBytes);
+
+                    musicSegment.InMemoryMediaSize = wemBytes.Length;
+                    musicSegment.DurationMs = wemFile.FmtChunk.SampleCount / (double)wemFile.FmtChunk.SampleRate * 1000;
+                }
             }
         }
 

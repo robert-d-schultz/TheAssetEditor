@@ -6,6 +6,7 @@ using Editors.Audio.Shared.GameInformation.Warhammer3;
 using Editors.Audio.Shared.Storage;
 using Editors.Audio.Shared.Wwise.Generators.Bkhd;
 using Editors.Audio.Shared.Wwise.Generators.Hirc;
+using Editors.Audio.Shared.Wwise.Generators.Hirc.V136;
 using Shared.Core.PackFiles.Models;
 using Shared.Core.PackFiles.Models.FileSources;
 using Shared.Core.PackFiles.Utility;
@@ -34,6 +35,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
         private readonly IAudioRepository _audioRepository;
         private readonly HircGeneratorServiceFactory _hircGeneratorServiceFactory;
         private readonly IAudioEditorIntegrityService _audioEditorIntegrityService;
+        private readonly IMusicSwitchContainerMergeService _musicSwitchContainerMergeService;
 
         private readonly ILogger _logger = Logging.Create<SoundBankGeneratorService>();
 
@@ -41,12 +43,14 @@ namespace Editors.Audio.Shared.Wwise.Generators
             IFileSaveService fileSaveService,
             ApplicationSettingsService applicationSettingsService,
             IAudioRepository audioRepository,
-            IAudioEditorIntegrityService audioEditorIntegrityService)
+            IAudioEditorIntegrityService audioEditorIntegrityService,
+            IMusicSwitchContainerMergeService musicSwitchContainerMergeService)
         {
             _fileSaveService = fileSaveService;
             _applicationSettingsService = applicationSettingsService;
             _audioRepository = audioRepository;
             _audioEditorIntegrityService = audioEditorIntegrityService;
+            _musicSwitchContainerMergeService = musicSwitchContainerMergeService;
 
             var bankGeneratorVersion = (uint)GameInformationDatabase.GetGameById(_applicationSettingsService.CurrentSettings.CurrentGame).BankGeneratorVersion;
             _hircGeneratorServiceFactory = HircGeneratorServiceFactory.CreateFactory(bankGeneratorVersion);
@@ -78,7 +82,71 @@ namespace Editors.Audio.Shared.Wwise.Generators
 
             SortHircs(hircItems);
 
+            // Appended after sorting rather than run through it. SortHircs orders Play targets and
+            // Events, and music is neither - it is reached through the decision tree, so it has its
+            // own ordering: tracks before their segments, segments before the sequence over them.
+            hircItems.AddRange(GenerateMusicHircs(soundBank));
+
             WriteSoundBank(soundBank.Id, soundBank.LanguageId, soundBank.FileName, soundBank.FilePath, hircItems);
+        }
+
+        /// <summary>
+        /// The music hierarchy this bank contributes, plus the vanilla Music Switch containers
+        /// re-emitted with the mod's branches merged in. Nothing here is reached by a Play action -
+        /// an Action Event sets a State and the merged decision tree turns that into audio.
+        /// </summary>
+        private List<HircItem> GenerateMusicHircs(SoundBank soundBank)
+        {
+            var hircItems = new List<HircItem>();
+            if (soundBank.MusicRandomSequences.Count == 0)
+                return hircItems;
+
+            foreach (var musicRandomSequence in soundBank.MusicRandomSequences)
+            {
+                foreach (var musicSegment in soundBank.GetMusicSegments(musicRandomSequence))
+                {
+                    hircItems.Add(new CAkMusicTrackGenerator_V136().GenerateHirc(musicSegment));
+                    hircItems.Add(_hircGeneratorServiceFactory.GenerateHirc(musicSegment));
+                }
+
+                hircItems.Add(_hircGeneratorServiceFactory.GenerateHirc(musicRandomSequence));
+            }
+
+            hircItems.AddRange(GenerateMergedMusicSwitchContainers(soundBank));
+            return hircItems;
+        }
+
+        private List<HircItem> GenerateMergedMusicSwitchContainers(SoundBank soundBank)
+        {
+            var hircItems = new List<HircItem>();
+
+            // One container per State Group, carrying every branch the mod adds to it.
+            var branchesByContainerId = new Dictionary<uint, List<MusicBranch>>();
+
+            foreach (var musicRandomSequence in soundBank.MusicRandomSequences)
+            {
+                var containerId = musicRandomSequence.DirectParentId;
+                if (!branchesByContainerId.TryGetValue(containerId, out var branches))
+                    branchesByContainerId[containerId] = branches = [];
+
+                branches.Add(new MusicBranch(musicRandomSequence.StateName, musicRandomSequence.Id));
+            }
+
+            foreach (var (containerId, branches) in branchesByContainerId)
+            {
+                var vanillaContainer = _audioRepository.GetHircs(AkBkHircType.Music_Switch)
+                    .FirstOrDefault(hircItem => hircItem.Id == containerId && hircItem.IsCA) as CAkMusicSwitchCntr_V136;
+
+                if (vanillaContainer == null)
+                {
+                    _logger.Here().Error($"Music Switch container {containerId} was not found in the vanilla data, so its branches cannot be merged");
+                    continue;
+                }
+
+                hircItems.Add(_musicSwitchContainerMergeService.MergeBranches(vanillaContainer, branches));
+            }
+
+            return hircItems;
         }
 
         public void GenerateDialogueEventsForTestingSoundBank(SoundBank soundBank)
