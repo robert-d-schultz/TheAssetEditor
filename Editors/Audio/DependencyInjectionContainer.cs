@@ -127,6 +127,7 @@ namespace Editors.Audio
             serviceCollection.AddScoped<IAudioProjectCompilerService, AudioProjectCompilerService>();
             serviceCollection.AddScoped<ISoundBankGeneratorService, SoundBankGeneratorService>();
             serviceCollection.AddScoped<IWemGeneratorService, WemGeneratorService>();
+            serviceCollection.AddScoped<IMusicSwitchContainerMergeService, MusicSwitchContainerMergeService>();
             serviceCollection.AddScoped<IDatGeneratorService, DatGeneratorService>();
 
             // Audio Explorer

@@ -89,5 +89,10 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
 
         /// <summary>The weight on every vanilla playlist node, root and leaf alike.</summary>
         public const uint PlaylistDefaultWeight = 50000;
+
+        /// <summary>The weight and probability on every branch of a vanilla music decision tree.
+        /// They are the same on all of them, including the default branch.</summary>
+        public const ushort BranchWeight = 50;
+        public const ushort BranchProbability = 100;
     }
 }

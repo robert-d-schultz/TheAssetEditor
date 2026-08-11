@@ -18,6 +18,7 @@
 	  <Compile Remove="MusicAudioProjectServiceTests.cs" />
 	  <Compile Remove="MusicEventShapeResearch.cs" />
 	  <Compile Remove="MusicHierarchyGenerationTests.cs" />
+	  <Compile Remove="MusicSwitchContainerMergeTests.cs" />
 	  <Compile Remove="MusicHircRoundTripResearch.cs" />
 	  <Compile Remove="SetStateActionGenerationTests.cs" />
 	  <Compile Remove="VanillaBankReader.cs" />
