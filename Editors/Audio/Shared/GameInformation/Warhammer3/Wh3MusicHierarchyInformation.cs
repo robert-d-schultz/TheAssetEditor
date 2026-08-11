@@ -38,10 +38,10 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         ///   Battle_Music_WH3_Culture                     26264058,  result x culture     -> listed
         ///   WH3_Campaign_Subcultures                     145953291, subculture x resolution
         ///   Battle_Music_WH3_Culture                     67383790,  six arguments deep
-        ///   WH3_Campaign_Music_AMS_Fragments_Faction     no container branches on it
-        ///   WH3_AMS_Pulse_Percussion_Options             no container branches on it
-        ///   WH3_AMS_Pulse_Pitched_Orchestral_Options     no container branches on it
-        ///   WH3_AMS_Pulse_Pitched_Ethnic_Options         no container branches on it
+        ///   WH3_Campaign_Music_AMS_Fragments_Faction     read elsewhere, see below
+        ///   WH3_AMS_Pulse_Percussion_Options             read elsewhere, see below
+        ///   WH3_AMS_Pulse_Pitched_Orchestral_Options     read elsewhere, see below
+        ///   WH3_AMS_Pulse_Pitched_Ethnic_Options         read elsewhere, see below
         ///
         /// 67383790 is left out although it names the culture, because it names it as the default:
         /// the culture level of that tree is a single key 0 node, and the three levels below it are
@@ -53,9 +53,25 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         /// campaign music rather than the subculture's theme, and giving it the same audio as the
         /// theme is a decision for whoever wires it up rather than a consequence of this table.
         ///
-        /// The four with no container are not unused - they are the adaptive music system, and are
-        /// read by switch tracks inside the music rather than by a decision tree. Serving those means
-        /// generating switch track params, not merging a branch, which is a different job entirely.
+        /// The four with no container are the adaptive music system. They are not unused and they are
+        /// not all the same: MusicEventShapeResearch.DumpWhatReadsTheAmsStateGroups counted what
+        /// actually reads each one, and it is two different mechanisms, neither of them a tree.
+        ///
+        ///   the three Pulse Groups    9 switch tracks each, one per music track that carries pulses.
+        ///                             A switch track holds a sub-track per culture with its own
+        ///                             source - 16 for percussion, 11 orchestral, 6 ethnic - and
+        ///                             picks between them on the State. Adding a culture means adding
+        ///                             a sub-track, a source and an association to nine vanilla
+        ///                             Music_Tracks, three times over.
+        ///
+        ///   AMS_Fragments_Faction     one plain Switch container, 418295225 in campaign_music__core,
+        ///                             with 17 switches over 16 children. Not in the music hierarchy
+        ///                             at all - the ambient fragments are sounds laid over the music.
+        ///
+        /// Setting a State none of them lists is harmless rather than broken: each falls back to its
+        /// own default, which is 'Cathay' for percussion and 'Off' / 'None' for the other three. So a
+        /// new culture that skips these still gets Cathay's percussion pulse and no pitched pulses or
+        /// ambient fragments, which is a thinner mix rather than a failure.
         /// </summary>
         public static uint? GetMusicSwitchContainerId(string stateGroupName) => stateGroupName switch
         {

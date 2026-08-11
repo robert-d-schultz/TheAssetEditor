@@ -57,10 +57,14 @@ namespace Editors.MusicDatEditor.ViewModels
         {
             get
             {
+                // Worth being specific that this is a fallback rather than a failure: these State
+                // Groups are read by switch tracks and a plain Switch container, both of which have
+                // a default, so an unlisted culture gets the default's audio and not silence.
                 if (!CanCarryOwnAudio)
                     return "This event can only select music that already exists - the Audio Editor cannot give it " +
-                           "files of its own, because nothing in the game branches on its State Group in a way a " +
-                           "mod can extend. Point it at an existing culture's music instead.";
+                           "files of its own, because its State Group is read by the adaptive music system rather " +
+                           "than by a decision tree a mod can extend. Left as a new name it falls back to that " +
+                           "system's default, so it still plays something; point it at an existing culture to choose what.";
 
                 // Worth saying because the decision tree makes it so rather than anyone choosing it:
                 // battle music branches on the result above the culture, and vanilla has no default

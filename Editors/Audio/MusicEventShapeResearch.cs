@@ -1,4 +1,4 @@
-﻿using Editors.Audio.Shared.GameInformation.Warhammer3;
+using Editors.Audio.Shared.GameInformation.Warhammer3;
 using Editors.Audio.Shared.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -91,6 +91,123 @@ namespace Test.Audio
             DumpWholeDecisionTree(repository, 26264058);
             DumpWholeDecisionTree(repository, 145953291);
             DumpWholeDecisionTree(repository, 67383790);
+
+            DumpWhatReadsTheAmsStateGroups(repository);
+        }
+
+        /// <summary>
+        /// What actually consumes the four AMS State Groups. No Music Switch container branches on
+        /// them, so a State set against one selects nothing at the tree level - but the events are
+        /// vanilla and clearly do something, and the question is what. A Music Track can be a switch
+        /// track, which picks between its own sub-tracks on a Group, and that is the other place a
+        /// State is read.
+        /// </summary>
+        static void DumpWhatReadsTheAmsStateGroups(IAudioRepository repository)
+        {
+            string[] amsStateGroups =
+            [
+                "WH3_Campaign_Music_AMS_Fragments_Faction",
+                "WH3_AMS_Pulse_Percussion_Options",
+                "WH3_AMS_Pulse_Pitched_Orchestral_Options",
+                "WH3_AMS_Pulse_Pitched_Ethnic_Options"
+            ];
+
+            var switchTracks = repository.GetHircs(AkBkHircType.Music_Track)
+                .OfType<CAkMusicTrack_V136>()
+                .Where(track => track.SwitchParams != null)
+                .ToList();
+
+            var switchContainers = repository.GetHircs(AkBkHircType.Music_Switch)
+                .OfType<CAkMusicSwitchCntr_V136>()
+                .ToList();
+
+            TestContext.Out.WriteLine($"=== what reads the AMS State Groups ({switchTracks.Count} switch tracks in the game) ===");
+
+            foreach (var stateGroupName in amsStateGroups)
+            {
+                var groupId = WwiseHash.Compute(stateGroupName);
+
+                var containers = switchContainers
+                    .Where(container => container.Arguments.Any(argument => argument.GroupId == groupId))
+                    .ToList();
+
+                var tracks = switchTracks
+                    .Where(track => track.SwitchParams!.GroupId == groupId)
+                    .ToList();
+
+                TestContext.Out.WriteLine($"\n{stateGroupName} ({groupId})");
+                TestContext.Out.WriteLine($"  Music Switch containers branching on it: {containers.Count}");
+                TestContext.Out.WriteLine($"  switch tracks reading it: {tracks.Count}");
+
+                // A State is read in more places than the music hierarchy: a plain Switch container
+                // can be driven by a State Group, and any node can carry a State chunk that changes
+                // its properties. A Group nothing in the music hierarchy reads may still be doing
+                // one of those, so absence there is not absence full stop.
+                var switchContainerCount = repository.GetHircs(AkBkHircType.SwitchContainer)
+                    .OfType<CAkSwitchCntr_V136>()
+                    .Count(container => container.GroupId == groupId);
+
+                AkBkHircType[] stateAwareTypes =
+                [
+                    AkBkHircType.Sound, AkBkHircType.RandomSequenceContainer, AkBkHircType.SwitchContainer,
+                    AkBkHircType.LayerContainer, AkBkHircType.ActorMixer, AkBkHircType.Music_Track,
+                    AkBkHircType.Music_Segment, AkBkHircType.Music_Random_Sequence, AkBkHircType.Music_Switch
+                ];
+
+                var stateChunkCount = stateAwareTypes
+                    .SelectMany(repository.GetHircs)
+                    .Count(hirc => HircReadsStateGroup(hirc, groupId));
+
+                TestContext.Out.WriteLine($"  plain Switch containers driven by it: {switchContainerCount}");
+
+                foreach (var plainSwitch in repository.GetHircs(AkBkHircType.SwitchContainer)
+                    .OfType<CAkSwitchCntr_V136>()
+                    .Where(plainSwitch => plainSwitch.GroupId == groupId))
+                {
+                    TestContext.Out.WriteLine(
+                        $"    switch container {plainSwitch.Id} in {Path.GetFileName(plainSwitch.BnkFilePath)} " +
+                        $"groupType={plainSwitch.EGroupType} default='{repository.GetNameFromId(plainSwitch.DefaultSwitch)}' " +
+                        $"children={plainSwitch.Children.ChildIds.Count} switches={plainSwitch.SwitchList.Count}");
+
+                    foreach (var switchPackage in plainSwitch.SwitchList.OfType<CAkSwitchCntr_V136.CAkSwitchPackage_V136>())
+                        TestContext.Out.WriteLine(
+                            $"      '{repository.GetNameFromId(switchPackage.SwitchId)}' -> {switchPackage.NodeIdList.Count} node(s)");
+                }
+                TestContext.Out.WriteLine($"  nodes carrying a State chunk for it: {stateChunkCount}");
+
+                foreach (var track in tracks.Take(3))
+                {
+                    TestContext.Out.WriteLine(
+                        $"    track {track.Id} parent={track.NodeBaseParams.DirectParentId} " +
+                        $"groupType={track.SwitchParams!.GroupType} default={track.SwitchParams.DefaultSwitch} " +
+                        $"assoc={track.SwitchParams.SwitchAssoc.Count} subTracks={track.NumSubTrack} sources={track.SourceList.Count}");
+
+                    foreach (var switchId in track.SwitchParams.SwitchAssoc)
+                        TestContext.Out.WriteLine($"      assoc '{repository.GetNameFromId(switchId)}' ({switchId})");
+                }
+            }
+        }
+
+        /// <summary>Whether this hirc carries a State chunk for the Group - the mechanism by which a
+        /// State changes a node's properties rather than selecting between children.</summary>
+        static bool HircReadsStateGroup(HircItem hirc, uint groupId)
+        {
+            var nodeBaseParams = hirc switch
+            {
+                CAkSound_V136 sound => sound.NodeBaseParams,
+                CAkRanSeqCntr_V136 ranSeq => ranSeq.NodeBaseParams,
+                CAkSwitchCntr_V136 switchCntr => switchCntr.NodeBaseParams,
+                CAkLayerCntr_V136 layer => layer.NodeBaseParams,
+                CAkActorMixer_V136 actorMixer => actorMixer.NodeBaseParams,
+                CAkMusicTrack_V136 track => track.NodeBaseParams,
+                CAkMusicSegment_V136 segment => segment.MusicNodeParams.NodeBaseParams,
+                CAkMusicRanSeqCntr_V136 musicRanSeq => musicRanSeq.MusicTransNodeParams.MusicNodeParams.NodeBaseParams,
+                CAkMusicSwitchCntr_V136 musicSwitch => musicSwitch.MusicTransNodeParams.MusicNodeParams.NodeBaseParams,
+                _ => null
+            };
+
+            return nodeBaseParams != null
+                && nodeBaseParams.StateChunk.StateChunks.Any(stateChunk => stateChunk.StateGroupId == groupId);
         }
 
         static void DumpWholeDecisionTree(IAudioRepository repository, uint switchContainerId)
