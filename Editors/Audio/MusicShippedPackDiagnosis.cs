@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Shared.Core.PackFiles;
 using Shared.GameFormats.MusicDat;
 using Shared.GameFormats.Wwise;
@@ -842,6 +842,123 @@ namespace Test.Audio
             foreach (var segment in modHircs.Values.OfType<CAkMusicSegment_V136>())
                 Console.WriteLine($"  Segment {segment.Id}: meterFlag {segment.MusicNodeParams.MeterInfoFlag}, " +
                     $"tempo {segment.MusicNodeParams.AkMeterInfo?.Tempo}, gridPeriod {segment.MusicNodeParams.AkMeterInfo?.GridPeriod}");
+        }
+
+        /// <summary>
+        /// A pack whose Araby branch points at Cathay's own vanilla node instead of the mod's.
+        ///
+        /// Three fixes aimed at fields of the generated hierarchy have each left the branch silent,
+        /// so this stops guessing at fields and splits the problem in half instead. Cathay plays, so
+        /// its node is known good; if Araby playing Cathay's music is audible then everything above
+        /// the node - the .dat scripts, the State, the container, the decision tree, the .bnk load
+        /// order - is proven, and the fault is entirely inside the hircs the editor generates. If it
+        /// is still silent then the branch is never reached at all, and every field of the generated
+        /// hierarchy is beside the point.
+        ///
+        /// Nothing of the mod's hierarchy is removed, only the leaf's target is repointed, so the
+        /// two packs differ by exactly the thing under test.
+        /// </summary>
+        [Test]
+        public void BuildAPackWhoseArabyBranchPlaysCathaysNode()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            var arabyKey = WwiseHash.Compute("araby");
+            var cathayKey = WwiseHash.Compute("cathay");
+
+            var testingBank = modPack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music_1_music_araby_for_testing.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var bnk = BnkFile.CreateFromBytes(testingBank.Value.DataSource.ReadData(), testingBank.Key, false);
+            var hircItems = bnk.HircChunk.HircItems;
+
+            foreach (var container in hircItems.OfType<CAkMusicSwitchCntr_V136>())
+            {
+                var arabyLeaves = new List<AkDecisionTree_V136.Node_V136>();
+                var cathayTargets = new List<uint>();
+                CollectLeavesFor(container.AkDecisionTree.DecisionTree, arabyKey, arabyLeaves);
+                CollectTargetsFor(container.AkDecisionTree.DecisionTree, cathayKey, cathayTargets);
+
+                var cathayTarget = cathayTargets.FirstOrDefault(target => target != 0);
+                Console.WriteLine($"\ncontainer {container.Id}: {arabyLeaves.Count} araby leaf/leaves, cathay node {cathayTarget}");
+
+                if (cathayTarget == 0)
+                {
+                    Console.WriteLine("  !! no cathay node to borrow, leaving this container alone");
+                    continue;
+                }
+
+                foreach (var leaf in arabyLeaves)
+                {
+                    Console.WriteLine($"  repointing araby leaf from {leaf.AudioNodeId} to {cathayTarget}");
+                    leaf.AudioNodeId = cathayTarget;
+                }
+
+                // A leaf only resolves to a node the container also claims, so the borrowed node has
+                // to join the child list the same way the mod's own node did.
+                var children = container.MusicTransNodeParams.MusicNodeParams.Children;
+                var childIds = new SortedSet<uint>(children.ChildIds) { cathayTarget };
+                children.ChildIds = [.. childIds];
+                children.NumChilds = (uint)childIds.Count;
+
+                container.AkDecisionTree.Nodes = AkDecisionTree_V136.FlattenDecisionTree(container.AkDecisionTree.DecisionTree);
+                container.TreeDataSize = container.AkDecisionTree.GetSize();
+                container.UpdateSectionSize();
+            }
+
+            var bkhdChunkBytes = Shared.GameFormats.Wwise.Bkhd.BkhdChunk.WriteData(bnk.BkhdChunk);
+            var hircChunkBytes = HircChunk.WriteData(Editors.Audio.Shared.Wwise.Generators.Hirc.HircChunkGenerator.GenerateHircChunk(hircItems), bnk.BkhdChunk.AkBankHeader.BankGeneratorVersion);
+
+            using var memStream = new MemoryStream();
+            memStream.Write(bkhdChunkBytes);
+            memStream.Write(hircChunkBytes);
+            var rebuilt = memStream.ToArray();
+
+            // Read it straight back, so a pack that cannot be parsed is caught here rather than by
+            // being silent in game and looking like the very thing under test.
+            var reparsed = BnkFile.CreateFromBytes(rebuilt, testingBank.Key, false);
+            Assert.That(reparsed.HircChunk.HircItems, Has.Count.EqualTo(hircItems.Count));
+
+            testingBank.Value.DataSource = new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt);
+
+            modPack.IsReadOnly = false;
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_cathay_node.pack");
+            provider.GetRequiredService<IPackFileService>().SavePackContainer(modPack, outputPath, false, Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
+
+            Console.WriteLine($"\nWrote {outputPath}");
+        }
+
+        static void CollectLeavesFor(AkDecisionTree_V136.Node_V136 node, uint key, List<AkDecisionTree_V136.Node_V136> found, bool matched = false)
+        {
+            foreach (var child in node.Nodes)
+            {
+                var childMatched = matched || child.Key == key;
+
+                if (child.Nodes.Count == 0)
+                {
+                    if (childMatched)
+                        found.Add(child);
+                }
+                else
+                    CollectLeavesFor(child, key, found, childMatched);
+            }
+        }
+
+        static void CollectTargetsFor(AkDecisionTree_V136.Node_V136 node, uint key, List<uint> found, bool matched = false)
+        {
+            foreach (var child in node.Nodes)
+            {
+                var childMatched = matched || child.Key == key;
+
+                if (child.Nodes.Count == 0)
+                {
+                    if (childMatched)
+                        found.Add(child.AudioNodeId);
+                }
+                else
+                    CollectTargetsFor(child, key, found, childMatched);
+            }
         }
 
         /// <summary>What the patched scripts actually say, next to what vanilla says, so the match
