@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Editors.Audio.Shared.AudioProject.Factories;
 using Editors.Audio.Shared.AudioProject.Models;
 
@@ -10,6 +10,7 @@ namespace Test.Audio
     internal class MusicHierarchyFactoryTests
     {
         const uint SwitchContainerId = 698158058;
+        const string SubcultureStateGroup = "WH3_Campaign_Subcultures";
 
         [Test]
         public void EachAudioFileBecomesASegmentUnderTheBranch()
@@ -35,7 +36,7 @@ namespace Test.Audio
         public void TheSegmentsPointAtTheAudioTheyWereBuiltFrom()
         {
             var audioFiles = CreateAudioFiles("empire_theme_01.wav", "empire_theme_02.wav");
-            var branch = new MusicHierarchyFactory().CreateMusicBranch([], SwitchContainerId, "Araby", audioFiles, "english(uk)");
+            var branch = new MusicHierarchyFactory().CreateMusicBranch([], SwitchContainerId, SubcultureStateGroup, "Araby", audioFiles, "english(uk)");
 
             Assert.Multiple(() =>
             {
@@ -53,7 +54,7 @@ namespace Test.Audio
             // resolves to whichever it read last.
             var usedHircIds = new HashSet<uint>();
             var branch = new MusicHierarchyFactory()
-                .CreateMusicBranch(usedHircIds, SwitchContainerId, "Araby", CreateAudioFiles("a.wav", "b.wav"), "sfx");
+                .CreateMusicBranch(usedHircIds, SwitchContainerId, SubcultureStateGroup, "Araby", CreateAudioFiles("a.wav", "b.wav"), "sfx");
 
             var ids = new List<uint> { branch.MusicRandomSequence.Id };
             foreach (var musicSegment in branch.MusicSegments)
@@ -91,7 +92,7 @@ namespace Test.Audio
         static MusicBranchResult CreateBranch(string stateName, params string[] wavFileNames)
         {
             return new MusicHierarchyFactory()
-                .CreateMusicBranch([], SwitchContainerId, stateName, CreateAudioFiles(wavFileNames), "sfx");
+                .CreateMusicBranch([], SwitchContainerId, SubcultureStateGroup, stateName, CreateAudioFiles(wavFileNames), "sfx");
         }
 
         static List<AudioFile> CreateAudioFiles(params string[] wavFileNames)
@@ -104,3 +105,4 @@ namespace Test.Audio
         }
     }
 }
+

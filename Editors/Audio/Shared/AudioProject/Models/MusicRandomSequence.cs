@@ -21,6 +21,10 @@ namespace Editors.Audio.Shared.AudioProject.Models
         /// decision tree node is keyed on its hash.</summary>
         public string StateName { get; set; }
 
+        /// <summary>The State Group that State belongs to. A container can branch on several, so the
+        /// merge needs this to know which level of the tree the State sits at.</summary>
+        public string StateGroupName { get; set; }
+
         /// <summary>Zero to inherit the bus, which is what almost every vanilla branch does.</summary>
         public uint OverrideBusId { get; set; }
 

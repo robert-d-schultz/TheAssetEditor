@@ -30,18 +30,28 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         /// State Group name. These are vanilla hirc ids, so a merge has to re-emit the whole
         /// container the way the Dialogue Event merge re-emits a whole dialogue event.
         ///
-        /// Only State Groups a single keyed node can serve are listed. Every Music Switch container
-        /// in the game was enumerated with MusicEventShapeResearch.DumpEveryMusicSwitchContainer, and
-        /// of the six State Groups the music events target, exactly one qualifies:
+        /// Every Music Switch container in the game was enumerated with
+        /// MusicEventShapeResearch.DumpEveryMusicSwitchContainer, and the multi argument ones dumped
+        /// in full. Of the six State Groups the music events target, two can be served:
         ///
-        ///   WH3_Campaign_Subcultures                     698158058, depth 1  -> listed
-        ///   WH3_Campaign_Subcultures                     145953291, depth 2  (+ Resolution_State)
-        ///   Battle_Music_WH3_Culture                     26264058,  depth 2  (+ Battle_Result_State)
-        ///   Battle_Music_WH3_Culture                     67383790,  depth 6
+        ///   WH3_Campaign_Subcultures                     698158058, depth 1              -> listed
+        ///   Battle_Music_WH3_Culture                     26264058,  result x culture     -> listed
+        ///   WH3_Campaign_Subcultures                     145953291, subculture x resolution
+        ///   Battle_Music_WH3_Culture                     67383790,  six arguments deep
         ///   WH3_Campaign_Music_AMS_Fragments_Faction     no container branches on it
         ///   WH3_AMS_Pulse_Percussion_Options             no container branches on it
         ///   WH3_AMS_Pulse_Pitched_Orchestral_Options     no container branches on it
         ///   WH3_AMS_Pulse_Pitched_Ethnic_Options         no container branches on it
+        ///
+        /// 67383790 is left out although it names the culture, because it names it as the default:
+        /// the culture level of that tree is a single key 0 node, and the three levels below it are
+        /// musical key, segment and dynamic state. That is the adaptive battle music, which is
+        /// authored as a set of stems per key and mix rather than as one piece of music, so a branch
+        /// there would need a whole stem set rather than a file.
+        ///
+        /// 145953291 is left out for a different reason: it is reachable, but it is post battle
+        /// campaign music rather than the subculture's theme, and giving it the same audio as the
+        /// theme is a decision for whoever wires it up rather than a consequence of this table.
         ///
         /// The four with no container are not unused - they are the adaptive music system, and are
         /// read by switch tracks inside the music rather than by a decision tree. Serving those means
@@ -50,6 +60,7 @@ namespace Editors.Audio.Shared.GameInformation.Warhammer3
         public static uint? GetMusicSwitchContainerId(string stateGroupName) => stateGroupName switch
         {
             "WH3_Campaign_Subcultures" => 698158058,
+            "Battle_Music_WH3_Culture" => 26264058,
             _ => null
         };
 

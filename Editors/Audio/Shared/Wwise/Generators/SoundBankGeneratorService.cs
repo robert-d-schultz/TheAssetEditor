@@ -134,7 +134,7 @@ namespace Editors.Audio.Shared.Wwise.Generators
                 if (!branchesByContainerId.TryGetValue(containerId, out var branches))
                     branchesByContainerId[containerId] = branches = [];
 
-                branches.Add(new MusicBranch(musicRandomSequence.StateName, musicRandomSequence.Id));
+                branches.Add(new MusicBranch(musicRandomSequence.StateGroupName, musicRandomSequence.StateName, musicRandomSequence.Id));
             }
 
             return branchesByContainerId;

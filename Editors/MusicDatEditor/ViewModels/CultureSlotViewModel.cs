@@ -44,15 +44,37 @@ namespace Editors.MusicDatEditor.ViewModels
         /// their own files, so saying nothing here would let a modder spend an evening picking wavs
         /// that can never be reached.
         /// </summary>
-        public bool CanCarryOwnAudio =>
-            Wh3MusicEventInformation.TryResolveStateTarget(Slot.EventFor("placeholder"), out var stateGroupName, out _)
-            && Wh3MusicHierarchyInformation.CanCarryOwnAudio(stateGroupName);
+        public bool CanCarryOwnAudio => Wh3MusicHierarchyInformation.CanCarryOwnAudio(StateGroupName);
 
-        public string AudioSupportNote => CanCarryOwnAudio
-            ? "Audio can be added to this event in the Audio Editor."
-            : "This event can only select music that already exists - the Audio Editor cannot give it " +
-              "files of its own, because nothing in the game branches on its State Group in a way a " +
-              "mod can extend. Point it at an existing culture's music instead.";
+        /// <summary>The State Group this row's event sets, or null if the name matches no vanilla
+        /// pattern. Resolved from a placeholder culture because the name only differs by suffix.</summary>
+        string StateGroupName =>
+            Wh3MusicEventInformation.TryResolveStateTarget(Slot.EventFor("placeholder"), out var stateGroupName, out _)
+                ? stateGroupName
+                : null;
+
+        public string AudioSupportNote
+        {
+            get
+            {
+                if (!CanCarryOwnAudio)
+                    return "This event can only select music that already exists - the Audio Editor cannot give it " +
+                           "files of its own, because nothing in the game branches on its State Group in a way a " +
+                           "mod can extend. Point it at an existing culture's music instead.";
+
+                // Worth saying because the decision tree makes it so rather than anyone choosing it:
+                // battle music branches on the result above the culture, and vanilla has no default
+                // result, so one culture's music is written under all three outcomes alike.
+                if (StateGroupName == BattleCultureStateGroup)
+                    return "Audio can be added to this event in the Audio Editor. The same music will play " +
+                           "whether the battle is won, lost or drawn - vanilla splits those three, but a " +
+                           "single event cannot tell them apart.";
+
+                return "Audio can be added to this event in the Audio Editor.";
+            }
+        }
+
+        const string BattleCultureStateGroup = "Battle_Music_WH3_Culture";
 
         public CultureSlotViewModel(MusicDatCultureWiring.CultureSlot slot, Action changed)
         {

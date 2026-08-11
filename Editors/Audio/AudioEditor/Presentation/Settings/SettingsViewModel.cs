@@ -516,14 +516,17 @@ namespace Editors.Audio.AudioEditor.Presentation.Settings
             var actionEventName = TableHelpers.GetActionEventNameFromRow(selectedViewerRow);
             var actionEvent = _audioEditorStateService.AudioProject.GetActionEvent(actionEventName);
 
-            var stateNames = actionEvent.Actions
-                .Where(action => action.ActionType == AkActionType.SetState)
-                .Select(action => action.StateName);
+            var setStateActions = actionEvent.Actions
+                .Where(action => action.ActionType == AkActionType.SetState);
 
-            foreach (var stateName in stateNames)
+            // Matched on the State Group as well as the State: "Empire" exists in both the campaign
+            // subculture Group and the battle culture one, and they are separate branches.
+            foreach (var setStateAction in setStateActions)
             {
                 var musicRandomSequence = soundBank.MusicRandomSequences
-                    .FirstOrDefault(randomSequence => randomSequence.StateName == stateName);
+                    .FirstOrDefault(randomSequence =>
+                        randomSequence.StateName == setStateAction.StateName
+                        && randomSequence.StateGroupName == setStateAction.StateGroupName);
 
                 if (musicRandomSequence == null)
                     continue;

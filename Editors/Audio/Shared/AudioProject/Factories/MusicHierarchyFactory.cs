@@ -13,6 +13,7 @@ namespace Editors.Audio.Shared.AudioProject.Factories
         MusicBranchResult CreateMusicBranch(
             HashSet<uint> usedHircIds,
             uint musicSwitchContainerId,
+            string stateGroupName,
             string stateName,
             List<AudioFile> audioFiles,
             string language);
@@ -28,6 +29,7 @@ namespace Editors.Audio.Shared.AudioProject.Factories
         public MusicBranchResult CreateMusicBranch(
             HashSet<uint> usedHircIds,
             uint musicSwitchContainerId,
+            string stateGroupName,
             string stateName,
             List<AudioFile> audioFiles,
             string language)
@@ -41,6 +43,7 @@ namespace Editors.Audio.Shared.AudioProject.Factories
                 Name = stateName,
                 DirectParentId = musicSwitchContainerId,
                 StateName = stateName,
+                StateGroupName = stateGroupName,
                 OverrideBusId = Wh3MusicHierarchyInformation.NoOverrideBusId,
                 PlaylistRootItemId = RootPlaylistItemId
             };

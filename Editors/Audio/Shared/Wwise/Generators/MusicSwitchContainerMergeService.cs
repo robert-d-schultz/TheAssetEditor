@@ -8,8 +8,12 @@ using Shared.GameFormats.Wwise.Hirc.V136.Shared;
 
 namespace Editors.Audio.Shared.Wwise.Generators
 {
-    /// <summary>One branch to add to a vanilla Music Switch container's decision tree.</summary>
-    public record MusicBranch(string StateName, uint RandomSequenceId);
+    /// <summary>
+    /// One branch to add to a vanilla Music Switch container's decision tree. The State Group is
+    /// carried alongside the State because a container can branch on more than one Group, and the
+    /// merge has to know which level of the tree this State belongs at.
+    /// </summary>
+    public record MusicBranch(string StateGroupName, string StateName, uint RandomSequenceId);
 
     public interface IMusicSwitchContainerMergeService
     {
@@ -39,19 +43,13 @@ namespace Editors.Audio.Shared.Wwise.Generators
             ArgumentNullException.ThrowIfNull(vanillaContainer);
             ArgumentNullException.ThrowIfNull(branches);
 
-            // Only single argument containers are handled. The campaign subculture container is one,
-            // so a branch is a single node keyed on the State. Battle music branches on the result
-            // as well as the culture and is six deep, which needs a key per level - refused here
-            // rather than silently written as a tree the game cannot walk.
-            if (vanillaContainer.TreeDepth != 1)
-                throw new NotSupportedException(
-                    $"Music Switch container {vanillaContainer.Id} branches on {vanillaContainer.TreeDepth} arguments. " +
-                    "Only containers with a single argument can be merged into.");
+            var moddedRoot = new AkDecisionTree_V136.Node_V136();
 
-            var moddedRoot = new AkDecisionTree_V136.Node_V136
+            foreach (var branch in branches)
             {
-                Nodes = [.. branches.Select(CreateBranchNode)]
-            };
+                foreach (var keyPath in BuildKeyPaths(vanillaContainer, branch))
+                    InsertBranch(moddedRoot, keyPath, branch.RandomSequenceId);
+            }
 
             return CopyWithDecisionTree(vanillaContainer, moddedRoot);
         }
@@ -118,15 +116,101 @@ namespace Editors.Audio.Shared.Wwise.Generators
             return container;
         }
 
-        private static AkDecisionTree_V136.Node_V136 CreateBranchNode(MusicBranch branch)
+        /// <summary>
+        /// The key to use at each level of the tree, as one path per combination. The level that
+        /// branches on the State Group being set gets the State; every other level is filled in from
+        /// what vanilla already does there, because the branch has to be reachable no matter what
+        /// those other States happen to be at the time.
+        ///
+        /// Where vanilla has a default at a level, that one key covers everything and is the whole
+        /// answer. Where it does not - battle result is lose, win or draw with no default - the
+        /// branch is repeated once per key instead, which is how vanilla itself lists every culture
+        /// under all three results.
+        /// </summary>
+        private static List<List<uint>> BuildKeyPaths(CAkMusicSwitchCntr_V136 vanillaContainer, MusicBranch branch)
         {
-            return new AkDecisionTree_V136.Node_V136
+            var stateGroupId = WwiseHash.Compute(branch.StateGroupName);
+            var vanillaTree = vanillaContainer.AkDecisionTree.DecisionTree;
+
+            var branchLevel = vanillaContainer.Arguments
+                .FindIndex(argument => argument.GroupId == stateGroupId);
+
+            if (branchLevel == -1)
+                throw new NotSupportedException(
+                    $"Music Switch container {vanillaContainer.Id} does not branch on State Group " +
+                    $"'{branch.StateGroupName}', so a State from it selects nothing there.");
+
+            var keyPaths = new List<List<uint>> { new() };
+
+            for (var level = 0; level < vanillaContainer.TreeDepth; level++)
             {
-                Key = WwiseHash.Compute(branch.StateName),
-                AudioNodeId = branch.RandomSequenceId,
-                Weight = Wh3MusicHierarchyInformation.BranchWeight,
-                Probability = Wh3MusicHierarchyInformation.BranchProbability
-            };
+                List<uint> keysForLevel = level == branchLevel
+                    ? [WwiseHash.Compute(branch.StateName)]
+                    : GetVanillaKeysAtLevel(vanillaTree, level);
+
+                keyPaths = [.. keyPaths.SelectMany(keyPath => keysForLevel.Select(key => new List<uint>(keyPath) { key }))];
+            }
+
+            return keyPaths;
         }
+
+        /// <summary>
+        /// The keys vanilla uses at one level of the tree, or just the default when it has one.
+        /// An empty level yields the default, so a container with a level nothing has been written
+        /// against still produces a reachable path rather than none at all.
+        /// </summary>
+        private static List<uint> GetVanillaKeysAtLevel(AkDecisionTree_V136.Node_V136 vanillaTree, int level)
+        {
+            var nodesAtLevel = new List<AkDecisionTree_V136.Node_V136> { vanillaTree };
+            for (var depth = 0; depth < level; depth++)
+                nodesAtLevel = [.. nodesAtLevel.SelectMany(node => node.Nodes)];
+
+            var keys = nodesAtLevel
+                .SelectMany(node => node.Nodes)
+                .Select(node => node.Key)
+                .Distinct()
+                .ToList();
+
+            if (keys.Count == 0 || keys.Contains(DefaultKey))
+                return [DefaultKey];
+
+            return keys;
+        }
+
+        /// <summary>
+        /// Walks a path into the modded tree, reusing the nodes already on it. Paths for the same
+        /// branch share every level above the one that differs, which is what keeps three battle
+        /// results from producing three separate copies of the levels above them.
+        /// </summary>
+        private static void InsertBranch(AkDecisionTree_V136.Node_V136 moddedRoot, List<uint> keyPath, uint randomSequenceId)
+        {
+            var node = moddedRoot;
+
+            for (var level = 0; level < keyPath.Count; level++)
+            {
+                var key = keyPath[level];
+                var child = node.Nodes.FirstOrDefault(existing => existing.Key == key);
+
+                if (child == null)
+                {
+                    child = new AkDecisionTree_V136.Node_V136
+                    {
+                        Key = key,
+                        Weight = Wh3MusicHierarchyInformation.BranchWeight,
+                        Probability = Wh3MusicHierarchyInformation.BranchProbability
+                    };
+                    node.Nodes.Add(child);
+                }
+
+                node = child;
+            }
+
+            // Only the leaf names audio. An intermediate node carrying one would be read as a leaf
+            // and everything below it would become unreachable.
+            node.AudioNodeId = randomSequenceId;
+        }
+
+        /// <summary>The key Wwise reads as 'any value of this State Group'.</summary>
+        private const uint DefaultKey = 0;
     }
 }

@@ -84,6 +84,42 @@ namespace Test.Audio
             DumpMusicSwitchBranches(repository, 26264058, "Battle_Music_WH3_Culture");
 
             DumpEveryMusicSwitchContainer(repository);
+
+            // The multi argument trees, in full. A branch there is a path with a key per level, not
+            // a single node, so generating one means knowing what every level expects - including
+            // the levels that have nothing to do with the culture.
+            DumpWholeDecisionTree(repository, 26264058);
+            DumpWholeDecisionTree(repository, 145953291);
+            DumpWholeDecisionTree(repository, 67383790);
+        }
+
+        static void DumpWholeDecisionTree(IAudioRepository repository, uint switchContainerId)
+        {
+            TestContext.Out.WriteLine($"=== whole tree {switchContainerId} ===");
+
+            if (Find(repository, switchContainerId) is not CAkMusicSwitchCntr_V136 container)
+            {
+                TestContext.Out.WriteLine("  NOT FOUND");
+                return;
+            }
+
+            for (var index = 0; index < container.Arguments.Count; index++)
+                TestContext.Out.WriteLine($"  level {index}: {repository.GetNameFromId(container.Arguments[index].GroupId)}");
+
+            DumpTreeNode(repository, container.AkDecisionTree.DecisionTree, "  ", 0);
+        }
+
+        static void DumpTreeNode(IAudioRepository repository, AkDecisionTree_V136.Node_V136 node, string indent, int level)
+        {
+            foreach (var child in node.Nodes)
+            {
+                var keyName = child.Key == 0 ? "<default>" : repository.GetNameFromId(child.Key);
+                TestContext.Out.WriteLine(
+                    $"{indent}L{level} key={child.Key} '{keyName}' audioNodeId={child.AudioNodeId} " +
+                    $"children={child.Nodes.Count} weight={child.Weight} probability={child.Probability}");
+
+                DumpTreeNode(repository, child, indent + "  ", level + 1);
+            }
         }
 
         /// <summary>

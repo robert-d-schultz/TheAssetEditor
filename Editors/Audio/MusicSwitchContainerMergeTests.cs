@@ -1,4 +1,4 @@
-using Editors.Audio.Shared.GameInformation.Warhammer3;
+﻿using Editors.Audio.Shared.GameInformation.Warhammer3;
 using Editors.Audio.Shared.Wwise.Generators;
 using Shared.ByteParsing;
 using Shared.GameFormats.Wwise;
@@ -13,13 +13,17 @@ namespace Test.Audio
     internal class MusicSwitchContainerMergeTests
     {
         const uint SwitchContainerId = 698158058;
+        const uint BattleContainerId = 26264058;
         const uint NewRanSeqId = 5000;
+        const string SubcultureStateGroup = "WH3_Campaign_Subcultures";
+        const string BattleCultureStateGroup = "Battle_Music_WH3_Culture";
+        const string BattleResultStateGroup = "Battle_Result_State";
 
         [Test]
         public void ANewStateIsAddedAsABranchPointingAtItsRandomSequence()
         {
             var merged = new MusicSwitchContainerMergeService()
-                .MergeBranches(CreateVanillaContainer(), [new MusicBranch("Araby", NewRanSeqId)]);
+                .MergeBranches(CreateVanillaContainer(), [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
 
             var branch = merged.AkDecisionTree.DecisionTree.Nodes
                 .Single(node => node.Key == WwiseHash.Compute("Araby"));
@@ -36,7 +40,7 @@ namespace Test.Audio
         public void TheVanillaBranchesAreKept()
         {
             var merged = new MusicSwitchContainerMergeService()
-                .MergeBranches(CreateVanillaContainer(), [new MusicBranch("Araby", NewRanSeqId)]);
+                .MergeBranches(CreateVanillaContainer(), [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
 
             var keys = merged.AkDecisionTree.DecisionTree.Nodes.Select(node => node.Key).ToList();
 
@@ -54,7 +58,7 @@ namespace Test.Audio
         public void AStateVanillaAlreadyCoversIsReplacedRatherThanDuplicated()
         {
             var merged = new MusicSwitchContainerMergeService()
-                .MergeBranches(CreateVanillaContainer(), [new MusicBranch("Dwarfs", NewRanSeqId)]);
+                .MergeBranches(CreateVanillaContainer(), [new MusicBranch(SubcultureStateGroup, "Dwarfs", NewRanSeqId)]);
 
             var dwarfBranches = merged.AkDecisionTree.DecisionTree.Nodes
                 .Where(node => node.Key == WwiseHash.Compute("Dwarfs"))
@@ -71,7 +75,7 @@ namespace Test.Audio
         public void TheMergedContainerSurvivesAWriteReadRoundTrip()
         {
             var merged = new MusicSwitchContainerMergeService()
-                .MergeBranches(CreateVanillaContainer(), [new MusicBranch("Araby", NewRanSeqId)]);
+                .MergeBranches(CreateVanillaContainer(), [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
 
             var reloaded = new CAkMusicSwitchCntr_V136();
             reloaded.ReadHirc(new ByteChunk(merged.WriteData()));
@@ -100,7 +104,7 @@ namespace Test.Audio
             // vanilla here would make every mod look like it had deliberately set the same branches
             // and the merger could not tell which mod actually claimed a culture.
             var modded = new MusicSwitchContainerMergeService()
-                .CreateModdedContainer(CreateVanillaContainer(), [new MusicBranch("Araby", NewRanSeqId)]);
+                .CreateModdedContainer(CreateVanillaContainer(), [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
 
             var branch = modded.AkDecisionTree.DecisionTree.Nodes.Single();
 
@@ -124,7 +128,7 @@ namespace Test.Audio
             var vanillaContainer = CreateVanillaContainer();
 
             new MusicSwitchContainerMergeService()
-                .MergeBranches(vanillaContainer, [new MusicBranch("Araby", NewRanSeqId)]);
+                .MergeBranches(vanillaContainer, [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
 
             Assert.That(vanillaContainer.AkDecisionTree.DecisionTree.Nodes, Has.Count.EqualTo(2));
         }
@@ -138,8 +142,8 @@ namespace Test.Audio
             var mergeService = new MusicSwitchContainerMergeService();
             var vanillaContainer = CreateVanillaContainer();
 
-            var firstMod = mergeService.CreateModdedContainer(vanillaContainer, [new MusicBranch("Araby", NewRanSeqId)]);
-            var secondMod = mergeService.CreateModdedContainer(vanillaContainer, [new MusicBranch("Cathay", 6000)]);
+            var firstMod = mergeService.CreateModdedContainer(vanillaContainer, [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]);
+            var secondMod = mergeService.CreateModdedContainer(vanillaContainer, [new MusicBranch(SubcultureStateGroup, "Cathay", 6000)]);
 
             var merged = mergeService.MergeContainers(
                 mergeService.MergeContainers(vanillaContainer, firstMod), secondMod);
@@ -163,7 +167,7 @@ namespace Test.Audio
             var mergeService = new MusicSwitchContainerMergeService();
             var vanillaContainer = CreateVanillaContainer();
 
-            var modded = mergeService.CreateModdedContainer(vanillaContainer, [new MusicBranch("Dwarfs", NewRanSeqId)]);
+            var modded = mergeService.CreateModdedContainer(vanillaContainer, [new MusicBranch(SubcultureStateGroup, "Dwarfs", NewRanSeqId)]);
             var merged = mergeService.MergeContainers(vanillaContainer, modded);
 
             var dwarfBranch = merged.AkDecisionTree.DecisionTree.Nodes
@@ -173,15 +177,145 @@ namespace Test.Audio
         }
 
         [Test]
-        public void AMultiArgumentContainerIsRefusedRatherThanMergedWrongly()
+        public void ABattleCultureGetsAPathUnderEveryResult()
         {
-            // Battle music branches on the result as well as the culture, so a single keyed node is
-            // not a branch there. Writing one anyway produces a tree the game cannot walk.
-            var battleContainer = CreateVanillaContainer();
-            battleContainer.TreeDepth = 2;
+            // Battle music branches on the result before the culture, and vanilla has no default
+            // result - it is lose, win or draw and nothing else. So a culture with one piece of
+            // music has to appear under all three, or it plays for one outcome and falls silent for
+            // the other two.
+            var merged = new MusicSwitchContainerMergeService()
+                .MergeBranches(CreateVanillaBattleContainer(), [new MusicBranch(BattleCultureStateGroup, "Araby", NewRanSeqId)]);
 
+            var resultNodes = merged.AkDecisionTree.DecisionTree.Nodes;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(resultNodes, Has.Count.EqualTo(3), "the three vanilla results, and no fourth");
+
+                foreach (var resultNode in resultNodes)
+                {
+                    var arabyNode = resultNode.Nodes.SingleOrDefault(node => node.Key == WwiseHash.Compute("Araby"));
+                    Assert.That(arabyNode, Is.Not.Null, $"no Araby under result {resultNode.Key}");
+                    Assert.That(arabyNode.AudioNodeId, Is.EqualTo(NewRanSeqId));
+                }
+            });
+        }
+
+        [Test]
+        public void OnlyTheLeafOfABattlePathNamesAudio()
+        {
+            // An intermediate node carrying an audio id is read as a leaf, which would make the
+            // culture level below it unreachable and hand every battle the same music.
+            var modded = new MusicSwitchContainerMergeService()
+                .CreateModdedContainer(CreateVanillaBattleContainer(), [new MusicBranch(BattleCultureStateGroup, "Araby", NewRanSeqId)]);
+
+            Assert.Multiple(() =>
+            {
+                foreach (var resultNode in modded.AkDecisionTree.DecisionTree.Nodes)
+                {
+                    Assert.That(resultNode.AudioNodeId, Is.EqualTo(0u), "a result node is not a leaf");
+                    Assert.That(resultNode.Nodes, Has.Count.EqualTo(1));
+                }
+            });
+        }
+
+        [Test]
+        public void TheVanillaBattleCulturesSurviveUnderEveryResult()
+        {
+            var merged = new MusicSwitchContainerMergeService()
+                .MergeBranches(CreateVanillaBattleContainer(), [new MusicBranch(BattleCultureStateGroup, "Araby", NewRanSeqId)]);
+
+            Assert.Multiple(() =>
+            {
+                foreach (var resultNode in merged.AkDecisionTree.DecisionTree.Nodes)
+                {
+                    var keys = resultNode.Nodes.Select(node => node.Key).ToList();
+                    Assert.That(keys, Contains.Item(WwiseHash.Compute("Empire")));
+                    Assert.That(keys, Contains.Item(WwiseHash.Compute("Cathay")));
+                    Assert.That(keys, Has.Count.EqualTo(3), "the two vanilla cultures plus the new one");
+                }
+            });
+        }
+
+        [Test]
+        public void AMergedBattleContainerSurvivesAWriteReadRoundTrip()
+        {
+            var merged = new MusicSwitchContainerMergeService()
+                .MergeBranches(CreateVanillaBattleContainer(), [new MusicBranch(BattleCultureStateGroup, "Araby", NewRanSeqId)]);
+
+            var reloaded = new CAkMusicSwitchCntr_V136();
+            reloaded.ReadHirc(new ByteChunk(merged.WriteData()));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(reloaded.TreeDepth, Is.EqualTo(2));
+
+                // Three results, each with three cultures, plus the root. A nested tree is written
+                // as a flat list with child offsets, so a miscount here is not a missing branch -
+                // it desynchronises every hirc after the container in the bank.
+                Assert.That(reloaded.AkDecisionTree.Nodes, Has.Count.EqualTo(1 + 3 + 9));
+                Assert.That(reloaded.TreeDataSize, Is.EqualTo(merged.AkDecisionTree.GetSize()));
+
+                foreach (var resultNode in reloaded.AkDecisionTree.DecisionTree.Nodes)
+                {
+                    var arabyNode = resultNode.Nodes.SingleOrDefault(node => node.Key == WwiseHash.Compute("Araby"));
+                    Assert.That(arabyNode?.AudioNodeId, Is.EqualTo(NewRanSeqId));
+                }
+            });
+        }
+
+        [Test]
+        public void AStateGroupTheContainerDoesNotBranchOnIsRefused()
+        {
+            // Setting a State whose Group nothing in this container tests would put the branch at no
+            // level at all. Refused rather than written somewhere arbitrary.
             Assert.Throws<NotSupportedException>(() => new MusicSwitchContainerMergeService()
-                .MergeBranches(battleContainer, [new MusicBranch("Araby", NewRanSeqId)]));
+                .MergeBranches(CreateVanillaBattleContainer(), [new MusicBranch(SubcultureStateGroup, "Araby", NewRanSeqId)]));
+        }
+
+        // Stands in for the vanilla Battle_Music_WH3_Culture container 26264058: result first, then
+        // culture, no default at either level - trimmed to two of its sixteen cultures.
+        static CAkMusicSwitchCntr_V136 CreateVanillaBattleContainer()
+        {
+            var container = new CAkMusicSwitchCntr_V136
+            {
+                Id = BattleContainerId,
+                HircType = AkBkHircType.Music_Switch,
+                TreeDepth = 2
+            };
+
+            container.Arguments.Add(new AkGameSync_V136
+            {
+                GroupId = WwiseHash.Compute(BattleResultStateGroup),
+                GroupType = AkGroupType.State
+            });
+            container.Arguments.Add(new AkGameSync_V136
+            {
+                GroupId = WwiseHash.Compute(BattleCultureStateGroup),
+                GroupType = AkGroupType.State
+            });
+
+            var root = new AkDecisionTree_V136.Node_V136();
+            var audioNodeId = 100u;
+
+            foreach (var result in new[] { "lose", "win", "draw" })
+            {
+                var resultNode = CreateBranch(WwiseHash.Compute(result), 0);
+                foreach (var culture in new[] { "Empire", "Cathay" })
+                    resultNode.Nodes.Add(CreateBranch(WwiseHash.Compute(culture), audioNodeId++));
+
+                root.Nodes.Add(resultNode);
+            }
+
+            container.AkDecisionTree = new AkDecisionTree_V136
+            {
+                DecisionTree = root,
+                Nodes = AkDecisionTree_V136.FlattenDecisionTree(root)
+            };
+            container.TreeDataSize = container.AkDecisionTree.GetSize();
+            container.UpdateSectionSize();
+
+            return container;
         }
 
         // Stands in for the vanilla WH3_Campaign_Subcultures container: one argument, a default
@@ -233,3 +367,4 @@ namespace Test.Audio
         }
     }
 }
+

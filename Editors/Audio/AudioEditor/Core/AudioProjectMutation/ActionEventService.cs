@@ -128,16 +128,20 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                 return;
             }
 
-            // A branch per State. Picking more audio for a State that already has one extends its
-            // playlist rather than starting a second branch, since the decision tree can only point
-            // at one place.
+            // A branch per State, matched on its Group as well as its name - "Empire" is a State in
+            // both the campaign subculture Group and the battle culture one, and they are different
+            // branches in different containers.
+            //
+            // Picking more audio for a State that already has a branch extends its playlist rather
+            // than starting a second one, since the decision tree can only point at one place.
             var existingRandomSequence = soundBank.MusicRandomSequences
-                .FirstOrDefault(musicRandomSequence => musicRandomSequence.StateName == stateName);
+                .FirstOrDefault(musicRandomSequence =>
+                    musicRandomSequence.StateName == stateName && musicRandomSequence.StateGroupName == stateGroupName);
 
             if (existingRandomSequence != null)
             {
                 var addedSegments = _musicHierarchyFactory
-                    .CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateName, audioFiles, soundBank.Language)
+                    .CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateGroupName, stateName, audioFiles, soundBank.Language)
                     .MusicSegments;
 
                 foreach (var musicSegment in addedSegments)
@@ -154,7 +158,7 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
                 return;
             }
 
-            var branch = _musicHierarchyFactory.CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateName, audioFiles, soundBank.Language);
+            var branch = _musicHierarchyFactory.CreateMusicBranch(usedHircIds, musicSwitchContainerId.Value, stateGroupName, stateName, audioFiles, soundBank.Language);
             soundBank.MusicRandomSequences.Add(branch.MusicRandomSequence);
             AddMusicSegments(soundBank, branch.MusicSegments, audioFiles);
         }
@@ -227,22 +231,25 @@ namespace Editors.Audio.AudioEditor.Core.AudioProjectMutation
         /// </summary>
         private void RemoveMusicBranch(SoundBank soundBank, ActionEvent actionEvent)
         {
-            var stateNames = actionEvent.Actions
+            var setStateActions = actionEvent.Actions
                 .Where(action => action.ActionType == AkActionType.SetState)
-                .Select(action => action.StateName)
                 .ToList();
 
-            foreach (var stateName in stateNames)
+            foreach (var setStateAction in setStateActions)
             {
                 var stillSet = soundBank.ActionEvents
                     .Any(otherActionEvent => otherActionEvent.Actions
-                        .Any(action => action.ActionType == AkActionType.SetState && action.StateName == stateName));
+                        .Any(action => action.ActionType == AkActionType.SetState
+                            && action.StateName == setStateAction.StateName
+                            && action.StateGroupName == setStateAction.StateGroupName));
 
                 if (stillSet)
                     continue;
 
                 var musicRandomSequence = soundBank.MusicRandomSequences
-                    .FirstOrDefault(randomSequence => randomSequence.StateName == stateName);
+                    .FirstOrDefault(randomSequence =>
+                        randomSequence.StateName == setStateAction.StateName
+                        && randomSequence.StateGroupName == setStateAction.StateGroupName);
 
                 if (musicRandomSequence == null)
                     continue;
