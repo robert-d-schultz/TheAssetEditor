@@ -1100,6 +1100,89 @@ namespace Test.Audio
             Console.WriteLine($"\nWrote {outputPath}");
         }
 
+        /// <summary>
+        /// A pack that replaces vanilla's global_music__core.bnk outright, rather than adding a .bnk
+        /// alongside it and relying on Wwise to prefer the newcomer.
+        ///
+        /// A .bnk holding nothing but vanilla's containers with Cathay's branches removed changed
+        /// nothing in game, so a testing .bnk does not override the vanilla .bnk it is named after -
+        /// whatever the load order does, the definitions already resident win. Overriding a vanilla
+        /// file in Total War is done by shipping a file at the same path, so this does that: vanilla's
+        /// whole .bnk, with the two containers swapped for the merged ones and the mod's hierarchy
+        /// added, written back over audio\wwise\global_music__core.bnk.
+        ///
+        /// Everything vanilla had is carried across. Shipping only the containers under that name
+        /// would delete the other few thousand hircs the .bnk holds and take the rest of the game's
+        /// music with them.
+        /// </summary>
+        [Test]
+        public void BuildAPackThatReplacesTheVanillaMusicBankOutright()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            var testingBank = modPack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music_1_music_araby_for_testing.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var modBnk = BnkFile.CreateFromBytes(testingBank.Value.DataSource.ReadData(), testingBank.Key, false);
+            var mergedContainers = modBnk.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id);
+            var generatedHircs = modBnk.HircChunk.HircItems.Where(hirc => hirc is not CAkMusicSwitchCntr_V136).ToList();
+
+            Console.WriteLine($"merged containers: {string.Join(", ", mergedContainers.Keys)}");
+            Console.WriteLine($"generated hircs: {string.Join(", ", generatedHircs.Select(hirc => $"{hirc.HircType} {hirc.Id}"))}");
+
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var vanillaBnk = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false);
+            var vanillaHircs = vanillaBnk.HircChunk.HircItems;
+            Console.WriteLine($"\nvanilla {vanilla.Path}: {vanillaHircs.Count} hircs");
+
+            var swapped = 0;
+            for (var index = 0; index < vanillaHircs.Count; index++)
+            {
+                if (mergedContainers.TryGetValue(vanillaHircs[index].Id, out var merged))
+                {
+                    vanillaHircs[index] = merged;
+                    swapped++;
+                }
+            }
+
+            Assert.That(swapped, Is.EqualTo(mergedContainers.Count), "not every merged container found its vanilla counterpart");
+
+            // In front of everything, so a node is defined before the container that claims it.
+            vanillaHircs.InsertRange(0, generatedHircs);
+            Console.WriteLine($"swapped {swapped} container(s), added {generatedHircs.Count} hirc(s), now {vanillaHircs.Count}");
+
+            // Vanilla's own header, because the .bnk is being shipped under vanilla's name and its id
+            // is the hash of that name.
+            var bkhdChunkBytes = Shared.GameFormats.Wwise.Bkhd.BkhdChunk.WriteData(vanillaBnk.BkhdChunk);
+            var hircChunkBytes = HircChunk.WriteData(
+                Editors.Audio.Shared.Wwise.Generators.Hirc.HircChunkGenerator.GenerateHircChunk(vanillaHircs),
+                vanillaBnk.BkhdChunk.AkBankHeader.BankGeneratorVersion);
+
+            using var memStream = new MemoryStream();
+            memStream.Write(bkhdChunkBytes);
+            memStream.Write(hircChunkBytes);
+            var rebuilt = memStream.ToArray();
+
+            var reparsed = BnkFile.CreateFromBytes(rebuilt, vanilla.Path, false);
+            Assert.That(reparsed.HircChunk.HircItems, Has.Count.EqualTo(vanillaHircs.Count),
+                "the replacement .bnk did not read back with every hirc it was given");
+
+            Console.WriteLine($"rebuilt {rebuilt.Length} bytes, reparsed {reparsed.HircChunk.HircItems.Count} hircs");
+
+            modPack.IsReadOnly = false;
+            modPack.Add(new Shared.Core.PackFiles.Models.PackFile("global_music__core.bnk",
+                new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt)), "audio\\wwise");
+
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_replacing_vanilla_bank.pack");
+            provider.GetRequiredService<IPackFileService>().SavePackContainer(modPack, outputPath, false,
+                Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
+
+            Console.WriteLine($"\nWrote {outputPath}");
+        }
+
         /// <summary>Drops every branch keyed on one of the given keys, at whatever depth it sits.</summary>
         static int RemoveBranches(AkDecisionTree_V136.Node_V136 node, uint[] keys)
         {
