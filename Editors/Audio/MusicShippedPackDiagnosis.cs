@@ -1114,14 +1114,20 @@ namespace Test.Audio
         ///   containers - and the two Music Switch containers replaced with the merged ones.
         ///   events     - and the Events and Actions that set the State.
         ///   campaign   - and campaign_music__core.bnk replaced, which is the prebattle layer.
+        ///   adaptive   - and a branch in 67383790, the six deep container the table leaves out.
         ///
-        /// Only the last stage can play Araby. Every stage before it is asking one question: does the
-        /// game still sound normal, or has this stage's change made Wwise throw the .bnk away.
+        /// The campaign stage plays the mod's audio in prebattle and nothing in battle, although
+        /// 26264058 is merged, resolves araby, and reaches the wem. 67383790 is the only other
+        /// container in the game that branches on Battle_Music_WH3_Culture, so the last stage points
+        /// araby at a node 67383790 already owns. That needs no new hierarchy and cannot conflict over
+        /// a parent, and it asks one question: is this the container battle actually reads. Music of
+        /// any kind in battle means yes.
         /// </summary>
         [TestCase("hierarchy")]
         [TestCase("containers")]
         [TestCase("events")]
         [TestCase("campaign")]
+        [TestCase("adaptive")]
         public void BuildAPackThatReplacesTheVanillaMusicBankOutright(string stage)
         {
             using var provider = VanillaBankReader.CreateProvider(GameDirectory);
@@ -1129,9 +1135,10 @@ namespace Test.Audio
             var packFileService = provider.GetRequiredService<IPackFileService>();
             modPack.IsReadOnly = false;
 
-            var withContainers = stage is "containers" or "events" or "campaign";
-            var withEvents = stage is "events" or "campaign";
-            var withCampaign = stage is "campaign";
+            var withContainers = stage is "containers" or "events" or "campaign" or "adaptive";
+            var withEvents = stage is "events" or "campaign" or "adaptive";
+            var withCampaign = stage is "campaign" or "adaptive";
+            var withAdaptive = stage is "adaptive";
 
             var modBanks = modPack.GetAllFiles()
                 .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
@@ -1163,6 +1170,9 @@ namespace Test.Audio
 
             if (withCampaign)
                 destinations["campaign_music__core.bnk"] = [.. HircsOf("campaign_music_1_music_araby_for_testing.bnk")];
+
+            if (withAdaptive)
+                destinations["global_music__core.bnk"].Add(BranchArabyIntoTheAdaptiveContainer());
 
             var newFiles = new List<NewPackFileEntry>();
 
@@ -1233,6 +1243,46 @@ namespace Test.Audio
                 Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
 
             Console.WriteLine($"\nWrote {outputPath}");
+        }
+
+        /// <summary>
+        /// 67383790 with an araby branch pointing at a node it already owns.
+        ///
+        /// Its leaves are stem sets for the adaptive battle music rather than whole pieces, so a
+        /// branch here cannot name the mod's own Random Sequence without a hierarchy shaped like one
+        /// of those sets. Borrowing one of its existing children sidesteps that entirely - no new
+        /// hircs, no second container claiming a node another already parents - and still answers
+        /// whether this is the container battle reads.
+        /// </summary>
+        static CAkMusicSwitchCntr_V136 BranchArabyIntoTheAdaptiveContainer()
+        {
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var container = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false)
+                .HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().Single(hirc => hirc.Id == 67383790);
+
+            var cathayKey = WwiseHash.Compute("cathay");
+            var borrowed = PathsOf(container)
+                .Where(path => path.Key.Split(" / ").ElementAtOrDefault(2) == cathayKey.ToString())
+                .Select(path => path.Value)
+                .First(audioNodeId => audioNodeId != 0);
+
+            Console.WriteLine($"67383790: araby will point at {borrowed}, a node cathay already reaches");
+
+            var merged = new Editors.Audio.Shared.Wwise.Generators.MusicSwitchContainerMergeService()
+                .MergeBranches(container, [new Editors.Audio.Shared.Wwise.Generators.MusicBranch("Battle_Music_WH3_Culture", "araby", borrowed)]);
+
+            var before = PathsOf(container);
+            var after = PathsOf(merged);
+            Console.WriteLine($"67383790: {before.Count} paths -> {after.Count}");
+
+            // 884 paths is a lot of room for a merge to quietly lose one, and losing one here means
+            // some vanilla culture goes silent in battle rather than the new one.
+            Assert.That(before.Where(path => !after.TryGetValue(path.Key, out var now) || now != path.Value), Is.Empty,
+                "67383790 lost or changed a vanilla path");
+
+            return merged;
         }
 
         /// <summary>The .bnk without the named hircs, spliced out at the byte level the same way
@@ -1941,6 +1991,39 @@ namespace Test.Audio
             }
         }
 
+        /// <summary>
+        /// How many child blocks sit at each level, and how many of them offer key 0. A State with no
+        /// branch survives a level only if the block it lands in has a default, so anything short of
+        /// full coverage is a level where some paths dead end.
+        /// </summary>
+        static Dictionary<int, (int Blocks, int WithDefault)> DefaultCoveragePerLevel(CAkMusicSwitchCntr_V136 container)
+        {
+            const int recordSize = 12;
+            var treeBytes = container.AkDecisionTree.WriteData();
+            var coverage = new Dictionary<int, (int Blocks, int WithDefault)>();
+
+            void Walk(int index, int depth)
+            {
+                if (depth == container.TreeDepth)
+                    return;
+
+                var childrenIdx = BitConverter.ToUInt16(treeBytes, index * recordSize + 4);
+                var childrenCount = BitConverter.ToUInt16(treeBytes, index * recordSize + 6);
+
+                var hasDefault = Enumerable.Range(0, childrenCount)
+                    .Any(offset => BitConverter.ToUInt32(treeBytes, (childrenIdx + offset) * recordSize) == 0);
+
+                coverage.TryGetValue(depth, out var current);
+                coverage[depth] = (current.Blocks + 1, current.WithDefault + (hasDefault ? 1 : 0));
+
+                for (var offset = 0; offset < childrenCount; offset++)
+                    Walk(childrenIdx + offset, depth + 1);
+            }
+
+            Walk(0, 0);
+            return coverage;
+        }
+
         /// <summary>Every root to leaf path as the key sequence that reaches it and the audio node it
         /// names, walked over the twelve byte records the container writes.</summary>
         static Dictionary<string, uint> PathsOf(CAkMusicSwitchCntr_V136 container)
@@ -2108,6 +2191,208 @@ namespace Test.Audio
             CAkMusicSegment_V136 segment => segment.MusicNodeParams.NodeBaseParams.DirectParentId,
             _ => uint.MaxValue
         };
+
+        /// <summary>
+        /// Every Music Switch container in every vanilla .bnk, by the State Group it branches on and
+        /// whether a vanilla culture reaches a leaf through it.
+        ///
+        /// Prebattle plays the mod's audio and battle does not, so something the battle path needs is
+        /// not being touched. The mod only ever merges the containers its testing .bnks are named
+        /// after; if the container that answers to Battle_Music_WH3_Culture lives in a .bnk outside
+        /// that set, no branch was ever added to it and battle has nothing to select.
+        /// </summary>
+        [Test]
+        public void WhichBankHoldsTheContainerBattleBranchesOn()
+        {
+            var groupNames = new[]
+            {
+                "Battle_Music_WH3_Culture",
+                "WH3_Campaign_Subcultures",
+                "WH3_Campaign_Music_AMS_Fragments_Faction",
+                "WH3_AMS_Pulse_Percussion_Options",
+                "WH3_AMS_Pulse_Pitched_Ethnic_Options",
+                "WH3_AMS_Pulse_Pitched_Orchestral_Options"
+            };
+
+            var nameByGroupId = groupNames.ToDictionary(WwiseHash.Compute, name => name);
+            var cathayKey = WwiseHash.Compute("cathay");
+            var arabyKey = WwiseHash.Compute("araby");
+
+            foreach (var name in groupNames)
+                Console.WriteLine($"{WwiseHash.Compute(name),-12} {name}");
+
+            // Every audio pack, not just the two the earlier probes happened to name - a container
+            // battle branches on is only out of scope if it is genuinely not there.
+            foreach (var packPath in Directory.GetFiles(Path.Combine(GameDirectory, "data"), "audio*.pack"))
+            {
+                foreach (var (path, bytes) in VanillaBankReader.ReadMusicBanks(packPath))
+                {
+                    List<CAkMusicSwitchCntr_V136> containers;
+                    try
+                    {
+                        containers = [.. (BnkFile.CreateFromBytes(bytes, path, false).HircChunk?.HircItems ?? [])
+                            .OfType<CAkMusicSwitchCntr_V136>()];
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    foreach (var container in containers)
+                    {
+                        var level = container.Arguments.FindIndex(argument => nameByGroupId.ContainsKey(argument.GroupId));
+                        if (level == -1)
+                            continue;
+
+                        var groups = container.Arguments
+                            .Select(argument => nameByGroupId.TryGetValue(argument.GroupId, out var name) ? name : argument.GroupId.ToString())
+                            .ToList();
+
+                        var keysAtGroupLevel = PathsOf(container).Keys
+                            .Select(key => key.Split(" / "))
+                            .Where(keys => keys.Length > level)
+                            .Select(keys => uint.Parse(keys[level]))
+                            .Distinct()
+                            .ToList();
+
+                        Console.WriteLine($"\n{Path.GetFileName(packPath)}  {Path.GetFileName(path),-32} container {container.Id}");
+                        Console.WriteLine($"    depth {container.TreeDepth}: {string.Join(" / ", groups)}");
+                        Console.WriteLine($"    at the culture level: {keysAtGroupLevel.Count} keys, " +
+                            $"default {(keysAtGroupLevel.Contains(0) ? "yes" : "NO")}, " +
+                            $"cathay {(keysAtGroupLevel.Contains(cathayKey) ? "yes" : "no")}, " +
+                            $"araby {(keysAtGroupLevel.Contains(arabyKey) ? "yes" : "no")}");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// What key each level of a container's tree actually offers.
+        ///
+        /// Wh3MusicHierarchyInformation leaves 67383790 out of the table on the grounds that it names
+        /// the culture as the default - 'the culture level of that tree is a single key 0 node'. If
+        /// that were so, a culture with no branch would take the default and play whatever vanilla
+        /// plays there. Battle is silent for the new culture and not for a vanilla one, which is what
+        /// a level offering named keys and no default does, so the claim is worth measuring.
+        /// </summary>
+        [Test]
+        public void WhatKeysEachLevelOfTheBattleContainersOffer()
+        {
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var containers = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false)
+                .HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id);
+
+            var known = new[] { "Battle_Music_WH3_Culture", "WH3_Campaign_Subcultures" }.ToDictionary(WwiseHash.Compute, name => name);
+            var cathayKey = WwiseHash.Compute("cathay");
+            var arabyKey = WwiseHash.Compute("araby");
+
+            foreach (var containerId in new uint[] { 26264058, 67383790, 145953291, 698158058 })
+            {
+                var container = containers[containerId];
+                Console.WriteLine($"\n================ container {containerId} (depth {container.TreeDepth}) ================");
+
+                var keysByLevel = PathsOf(container).Keys
+                    .Select(path => path.Split(" / "))
+                    .SelectMany(keys => keys.Select((key, level) => (level, key: uint.Parse(key))))
+                    .GroupBy(entry => entry.level)
+                    .ToDictionary(group => group.Key, group => group.Select(entry => entry.key).Distinct().ToList());
+
+                // A level having a default somewhere is not the same as every block at that level
+                // having one. A State falls through only if the particular block it lands in offers
+                // key 0, so what matters is the coverage, not the presence.
+                var coverage = DefaultCoveragePerLevel(container);
+
+                for (var level = 0; level < container.TreeDepth; level++)
+                {
+                    var groupId = container.Arguments[level].GroupId;
+                    var groupName = known.TryGetValue(groupId, out var name) ? name : groupId.ToString();
+                    var keys = keysByLevel.TryGetValue(level, out var found) ? found : [];
+                    var (blocks, withDefault) = coverage[level];
+
+                    var notes = new List<string>();
+                    if (keys.Contains(cathayKey)) notes.Add("names cathay");
+                    if (keys.Contains(arabyKey)) notes.Add("names araby");
+
+                    Console.WriteLine($"    level {level}  {groupName,-28} {keys.Count,4} keys, " +
+                        $"{withDefault}/{blocks} blocks offer a default" +
+                        (notes.Count == 0 ? "" : $"   {string.Join(", ", notes)}"));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Both of Araby's chains walked to the wem, out of the pack that ships.
+        ///
+        /// Prebattle plays and battle does not, and the two go through different containers to
+        /// different Random Sequences. The prebattle one is a working control: whatever the battle
+        /// chain does differently from it is the difference between audio and silence.
+        /// </summary>
+        [Test]
+        public void BothOfArabysChainsWalkedToTheWem()
+        {
+            var stagePack = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_stage_campaign.pack");
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var pack = VanillaBankReader.OpenPack(provider, stagePack, markAsCa: false);
+
+            var wemsInPack = pack.GetAllFiles()
+                .Where(file => file.Key.EndsWith(".wem", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(file => Path.GetFileNameWithoutExtension(file.Key), file => file.Value.DataSource.Size);
+
+            var bankFile = pack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var hircs = BnkFile.CreateFromBytes(bankFile.Value.DataSource.ReadData(), bankFile.Key, false).HircChunk.HircItems;
+            var byId = hircs.ToDictionary(hirc => hirc.Id);
+            var arabyKey = WwiseHash.Compute("araby");
+
+            Console.WriteLine($"wems in the pack: {string.Join(", ", wemsInPack.Select(wem => $"{wem.Key} ({wem.Value} bytes)"))}\n");
+
+            foreach (var (containerId, label) in new (uint, string)[] { (698158058, "prebattle, plays"), (26264058, "battle, silent") })
+            {
+                var container = (CAkMusicSwitchCntr_V136)byId[containerId];
+                var leaf = PathsOf(container)
+                    .Where(path => path.Key.Split(" / ").Contains(arabyKey.ToString()))
+                    .Select(path => path.Value)
+                    .Distinct()
+                    .ToList();
+
+                Console.WriteLine($"container {containerId} ({label}) -> araby reaches {string.Join(", ", leaf)}");
+
+                foreach (var ranSeqId in leaf)
+                {
+                    if (!byId.TryGetValue(ranSeqId, out var hirc) || hirc is not CAkMusicRanSeqCntr_V136 ranSeq)
+                    {
+                        Console.WriteLine($"    {ranSeqId} is not a Music Random Sequence in this .bnk");
+                        continue;
+                    }
+
+                    foreach (var segmentId in ranSeq.MusicTransNodeParams.MusicNodeParams.Children.ChildIds)
+                    {
+                        var segment = (CAkMusicSegment_V136)byId[segmentId];
+                        Console.WriteLine($"    segment {segmentId}  duration {segment.Duration}ms, " +
+                            $"{segment.ArrayMarkersList.Count} markers, parent {segment.MusicNodeParams.NodeBaseParams.DirectParentId}");
+
+                        foreach (var trackId in segment.MusicNodeParams.Children.ChildIds)
+                        {
+                            var track = (CAkMusicTrack_V136)byId[trackId];
+
+                            foreach (var source in track.SourceList)
+                                Console.WriteLine($"      track {trackId} source {source.AkMediaInformation.SourceId} " +
+                                    $"type {source.StreamType}, declared {source.AkMediaInformation.InMemoryMediaSize} bytes, " +
+                                    $"wem in pack: {(wemsInPack.TryGetValue(source.AkMediaInformation.SourceId.ToString(), out var size) ? $"yes, {size} bytes" : "NO")}");
+
+                            foreach (var item in track.PlaylistList)
+                                Console.WriteLine($"      playlist item source {item.SourceId} " +
+                                    $"playAt {item.PlayAt}, begin {item.BeginTrimOffset}, end {item.EndTrimOffset}, duration {item.SrcDuration}");
+                        }
+                    }
+                }
+
+                Console.WriteLine();
+            }
+        }
 
         static void Record(Dictionary<string, (int Total, int Mismatched, string FirstExample)> results, string type, bool identical, string example)
         {
