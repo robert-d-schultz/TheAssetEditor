@@ -1101,121 +1101,133 @@ namespace Test.Audio
         }
 
         /// <summary>
-        /// A pack that replaces vanilla's global_music__core.bnk outright, rather than adding a .bnk
-        /// alongside it and relying on Wwise to prefer the newcomer.
+        /// A pack that ships no .bnk of its own at all - every hirc the mod defines goes into the
+        /// vanilla .bnk it belongs in, and those .bnks ship at vanilla's own paths. There is no second
+        /// .bnk whose load order, override behaviour or duplicate ids could also be the reason for
+        /// what is heard. Everything vanilla had is carried across untouched.
         ///
-        /// A .bnk holding nothing but vanilla's containers with Cathay's branches removed changed
-        /// nothing in game, so a testing .bnk does not override the vanilla .bnk it is named after -
-        /// whatever the load order does, the definitions already resident win. Overriding a vanilla
-        /// file in Total War is done by shipping a file at the same path, so this does that: vanilla's
-        /// whole .bnk, with the two containers swapped for the merged ones and the mod's hierarchy
-        /// added, written back over audio\wwise\global_music__core.bnk.
+        /// Built in stages, because a pack carrying every change at once only says whether all of
+        /// them together work. Each stage is the one before it plus one thing:
         ///
-        /// Everything vanilla had is carried across. Shipping only the containers under that name
-        /// would delete the other few thousand hircs the .bnk holds and take the rest of the game's
-        /// music with them.
+        ///   hierarchy - the mod's six music hircs appended to global_music__core.bnk. Known to leave
+        ///               the game sounding completely normal, so it is the baseline the rest sit on.
+        ///   containers - and the two Music Switch containers replaced with the merged ones.
+        ///   events     - and the Events and Actions that set the State.
+        ///   campaign   - and campaign_music__core.bnk replaced, which is the prebattle layer.
+        ///
+        /// Only the last stage can play Araby. Every stage before it is asking one question: does the
+        /// game still sound normal, or has this stage's change made Wwise throw the .bnk away.
         /// </summary>
-        [Test]
-        public void BuildAPackThatReplacesTheVanillaMusicBankOutright()
+        [TestCase("hierarchy")]
+        [TestCase("containers")]
+        [TestCase("events")]
+        [TestCase("campaign")]
+        public void BuildAPackThatReplacesTheVanillaMusicBankOutright(string stage)
         {
             using var provider = VanillaBankReader.CreateProvider(GameDirectory);
             var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
             var packFileService = provider.GetRequiredService<IPackFileService>();
             modPack.IsReadOnly = false;
 
+            var withContainers = stage is "containers" or "events" or "campaign";
+            var withEvents = stage is "events" or "campaign";
+            var withCampaign = stage is "campaign";
+
             var modBanks = modPack.GetAllFiles()
                 .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(file => file.Key, file => file.Value);
 
-            // Every vanilla .bnk a testing .bnk is named after gets replaced, not just the global one.
-            // Battle music and the campaign layer live in different vanilla .bnks, and replacing one
-            // of them leaves the other's branches nowhere.
-            var replacedIds = new HashSet<uint>();
+            var vanillaBanks = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack")).ToList();
+
+            HircItem[] HircsOf(string name) => [.. BnkFile
+                .CreateFromBytes(modBanks.Single(bank => bank.Key.EndsWith(name, StringComparison.OrdinalIgnoreCase)).Value.DataSource.ReadData(), name, false)
+                .HircChunk?.HircItems ?? []];
+
+            var globalHircs = HircsOf("global_music_1_music_araby_for_testing.bnk");
+            var shippedHircs = HircsOf("global_music_music_araby.bnk");
+
+            var destinations = new Dictionary<string, List<HircItem>>
+            {
+                ["global_music__core.bnk"] =
+                [
+                    .. globalHircs.Where(hirc => withContainers || hirc is not CAkMusicSwitchCntr_V136),
+
+                    // The Events and the Actions they fire are the only things that set the State, and
+                    // the .bnk the mod ships is the only place they live. Everything else in it is
+                    // already accounted for by the testing .bnk.
+                    .. withEvents
+                        ? shippedHircs.Where(hirc => globalHircs.All(existing => existing.Id != hirc.Id))
+                        : [],
+                ]
+            };
+
+            if (withCampaign)
+                destinations["campaign_music__core.bnk"] = [.. HircsOf("campaign_music_1_music_araby_for_testing.bnk")];
+
             var newFiles = new List<NewPackFileEntry>();
 
-            foreach (var (modPath, modFile) in modBanks.Where(bank => bank.Key.Contains("_for_testing.bnk", StringComparison.OrdinalIgnoreCase)))
+            foreach (var (vanillaName, modHircs) in destinations)
             {
-                var vanillaName = VanillaBankNameFor(modPath);
-                var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
-                    .First(bank => bank.Path.EndsWith(vanillaName, StringComparison.OrdinalIgnoreCase));
-
-                var vanillaIds = WalkHircSections(vanilla.Bytes).Select(section => section.Id).ToHashSet();
-                var modHircs = BnkFile.CreateFromBytes(modFile.DataSource.ReadData(), modPath, false).HircChunk?.HircItems ?? [];
+                var vanilla = vanillaBanks.First(bank => bank.Path.EndsWith(vanillaName, StringComparison.OrdinalIgnoreCase));
+                var vanillaSections = WalkHircSections(vanilla.Bytes).ToDictionary(section => section.Id, section => section.Section);
 
                 // Whatever vanilla already defines is a replacement; the rest is new and gets appended.
                 // Splitting on the id rather than on the hirc type keeps this honest about what the
                 // mod actually re-emits - the campaign .bnk re-emits plain Switch containers and
                 // Music Tracks too, not only Music Switch containers.
-                var replacements = modHircs.Where(hirc => vanillaIds.Contains(hirc.Id)).ToDictionary(hirc => hirc.Id);
-                var additions = modHircs.Where(hirc => !vanillaIds.Contains(hirc.Id)).ToList();
+                var replacements = modHircs.Where(hirc => vanillaSections.ContainsKey(hirc.Id)).ToDictionary(hirc => hirc.Id);
+                var additions = modHircs.Where(hirc => !vanillaSections.ContainsKey(hirc.Id)).ToList();
 
                 var rebuilt = SpliceHircs(vanilla.Bytes, replacements, additions);
                 var reparsed = BnkFile.CreateFromBytes(rebuilt, vanilla.Path, false);
 
-                Console.WriteLine($"{modPath}\n  -> {vanillaName}: {replacements.Count} replaced, {additions.Count} appended, " +
+                Console.WriteLine($"\n{vanillaName}: {replacements.Count} replaced, {additions.Count} appended, " +
                     $"{rebuilt.Length} bytes (vanilla was {vanilla.Bytes.Length}), reparsed {reparsed.HircChunk.HircItems.Count} hircs");
 
-                foreach (var hirc in modHircs)
+                // A replacement whose bytes match vanilla's changes nothing, so the ones that differ
+                // are the whole of what this pack does to a .bnk the game was happy with.
+                foreach (var (id, replacement) in replacements)
                 {
-                    replacedIds.Add(hirc.Id);
+                    replacement.UpdateSectionSize();
+                    var written = replacement.WriteData();
+                    var original = vanillaSections[id];
+                    var identical = written.Length == original.Length && written.AsSpan().SequenceEqual(original);
+
+                    // The first difference is always the size field, so the body is compared from
+                    // past the type, size and id - that offset is where the content actually diverges.
+                    const int bodyStart = 9;
+
+                    Console.WriteLine(identical
+                        ? $"    {replacement.HircType,-24} {id}  unchanged"
+                        : $"    {replacement.HircType,-24} {id}  +{written.Length - original.Length} bytes, " +
+                          $"body diverges at {FirstDifference(written[bodyStart..], original[bodyStart..])}");
+                }
+
+                foreach (var addition in additions)
+                    Console.WriteLine($"    {addition.HircType,-24} {addition.Id}  appended");
+
+                foreach (var hirc in modHircs)
                     Assert.That(reparsed.HircChunk.HircItems.Any(item => item.Id == hirc.Id), Is.True,
                         $"{hirc.HircType} {hirc.Id} did not survive the splice into {vanillaName}");
-                }
 
                 newFiles.Add(new NewPackFileEntry("audio\\wwise",
                     new Shared.Core.PackFiles.Models.PackFile(vanillaName,
                         new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt))));
             }
 
-            // The testing and merging .bnks are now redundant - the replaced vanilla .bnks carry
-            // everything they held. The .bnk the mod actually ships stays, because it is the only
-            // place the Events and the Actions that set the State live, and nothing selects a branch
-            // for a State that no Action ever sets. Only the ids it shares with a replaced .bnk come
-            // out of it, so Wwise is never handed the same id twice.
             foreach (var (path, file) in modBanks)
             {
-                if (path.Contains("_for_testing.bnk", StringComparison.OrdinalIgnoreCase) ||
-                    path.Contains("_for_merging.bnk", StringComparison.OrdinalIgnoreCase))
-                {
-                    packFileService.DeleteFile(modPack, file);
-                    Console.WriteLine($"dropped {path}");
-                    continue;
-                }
-
-                var trimmed = RemoveHircs(file.DataSource.ReadData(), replacedIds, out var removed);
-                if (removed.Count == 0)
-                    continue;
-
                 packFileService.DeleteFile(modPack, file);
-                newFiles.Add(new NewPackFileEntry("audio\\wwise",
-                    new Shared.Core.PackFiles.Models.PackFile(Path.GetFileName(path),
-                        new Shared.Core.PackFiles.Models.FileSources.MemorySource(trimmed))));
-
-                var kept = BnkFile.CreateFromBytes(trimmed, path, false).HircChunk?.HircItems ?? [];
-                Console.WriteLine($"trimmed {path}: dropped {removed.Count} ids now held by a replaced .bnk, " +
-                    $"kept {string.Join(", ", kept.Select(hirc => $"{hirc.HircType} {hirc.Id}"))}");
+                Console.WriteLine($"dropped {path}");
             }
 
             packFileService.AddFilesToPack(modPack, newFiles);
 
-            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_replacing_vanilla_bank.pack");
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, $"araby_stage_{stage}.pack");
             packFileService.SavePackContainer(modPack, outputPath, false,
                 Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
 
             Console.WriteLine($"\nWrote {outputPath}");
-        }
-
-        /// <summary>The vanilla .bnk a testing .bnk overrides. The naming scheme is
-        /// {base}_1_{project}_for_testing.bnk against vanilla's {base}__core.bnk.</summary>
-        static string VanillaBankNameFor(string testingBankPath)
-        {
-            var name = Path.GetFileName(testingBankPath);
-            var separator = name.IndexOf("_1_", StringComparison.Ordinal);
-
-            if (separator == -1)
-                throw new InvalidDataException($"{name} is not named like a testing .bnk");
-
-            return $"{name[..separator]}__core.bnk";
         }
 
         /// <summary>The .bnk without the named hircs, spliced out at the byte level the same way
@@ -1625,11 +1637,12 @@ namespace Test.Audio
         /// Anything that does not come back identical is a writer that cannot be trusted to emit a
         /// hirc the game will accept - including the ones the generator writes from scratch.
         /// </summary>
-        [Test]
-        public void WhetherVanillaHircsSurviveBeingWrittenBack()
+        [TestCase("global_music__core.bnk")]
+        [TestCase("campaign_music__core.bnk")]
+        public void WhetherVanillaHircsSurviveBeingWrittenBack(string BankUnderTest)
         {
             var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
-                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+                .First(bank => bank.Path.EndsWith(BankUnderTest, StringComparison.OrdinalIgnoreCase));
 
             var results = new Dictionary<string, (int Total, int Mismatched, string FirstExample)>();
 
