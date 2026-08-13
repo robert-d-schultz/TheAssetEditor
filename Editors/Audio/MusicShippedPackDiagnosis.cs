@@ -1115,6 +1115,8 @@ namespace Test.Audio
         ///   events     - and the Events and Actions that set the State.
         ///   campaign   - and campaign_music__core.bnk replaced, which is the prebattle layer.
         ///   adaptive   - and a branch in 67383790, the six deep container the table leaves out.
+        ///   eventbanks - the campaign stage, with every Event in the vanilla .bnk its vanilla
+        ///                siblings live in rather than all six in global_music__core.bnk.
         ///
         /// The campaign stage plays the mod's audio in prebattle and nothing in battle, although
         /// 26264058 is merged, resolves araby, and reaches the wem. 67383790 is the only other
@@ -1128,6 +1130,7 @@ namespace Test.Audio
         [TestCase("events")]
         [TestCase("campaign")]
         [TestCase("adaptive")]
+        [TestCase("eventbanks")]
         public void BuildAPackThatReplacesTheVanillaMusicBankOutright(string stage)
         {
             using var provider = VanillaBankReader.CreateProvider(GameDirectory);
@@ -1135,10 +1138,11 @@ namespace Test.Audio
             var packFileService = provider.GetRequiredService<IPackFileService>();
             modPack.IsReadOnly = false;
 
-            var withContainers = stage is "containers" or "events" or "campaign" or "adaptive";
-            var withEvents = stage is "events" or "campaign" or "adaptive";
-            var withCampaign = stage is "campaign" or "adaptive";
+            var withContainers = stage is "containers" or "events" or "campaign" or "adaptive" or "eventbanks";
+            var withEvents = stage is "events" or "campaign" or "adaptive" or "eventbanks";
+            var withCampaign = stage is "campaign" or "adaptive" or "eventbanks";
             var withAdaptive = stage is "adaptive";
+            var withRoutedEvents = stage is "eventbanks";
 
             var modBanks = modPack.GetAllFiles()
                 .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
@@ -1162,7 +1166,7 @@ namespace Test.Audio
                     // The Events and the Actions they fire are the only things that set the State, and
                     // the .bnk the mod ships is the only place they live. Everything else in it is
                     // already accounted for by the testing .bnk.
-                    .. withEvents
+                    .. withEvents && !withRoutedEvents
                         ? shippedHircs.Where(hirc => globalHircs.All(existing => existing.Id != hirc.Id))
                         : [],
                 ]
@@ -1170,6 +1174,9 @@ namespace Test.Audio
 
             if (withCampaign)
                 destinations["campaign_music__core.bnk"] = [.. HircsOf("campaign_music_1_music_araby_for_testing.bnk")];
+
+            if (withRoutedEvents)
+                RouteEventsToTheirVanillaBanks(shippedHircs, globalHircs, destinations);
 
             if (withAdaptive)
                 destinations["global_music__core.bnk"].Add(BranchArabyIntoTheAdaptiveContainer());
@@ -1243,6 +1250,65 @@ namespace Test.Audio
                 Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
 
             Console.WriteLine($"\nWrote {outputPath}");
+        }
+
+        /// <summary>
+        /// Puts each Event, and the Actions it fires, in the vanilla .bnk that holds the vanilla
+        /// Events of the same family.
+        ///
+        /// Vanilla splits them by the context that plays them: music_b_faction_* live in
+        /// battle_music__core.bnk, music_c_* in campaign_music__core.bnk. Putting all six in
+        /// global_music__core.bnk gets the campaign ones played, because that .bnk is loaded on the
+        /// campaign layer, and leaves the battle one somewhere battle never reads - so the script
+        /// posts music_b_faction_araby and nothing answers.
+        ///
+        /// An Event and its Actions have to travel together: the Event claims them as children, and a
+        /// child has to be in the same .bnk as the thing that claims it.
+        /// </summary>
+        static void RouteEventsToTheirVanillaBanks(HircItem[] shippedHircs, HircItem[] globalHircs, Dictionary<string, List<HircItem>> destinations)
+        {
+            var nameByEventId = new[]
+            {
+                "music_b_faction_araby",
+                "music_c_subculture_araby",
+                "music_c_ams_araby",
+                "music_c_ams_pulse_perc_araby",
+                "music_c_ams_pulse_orch_araby",
+                "music_c_ams_pulse_ethnic_araby"
+            }.ToDictionary(WwiseHash.Compute, name => name);
+
+            var byId = shippedHircs.ToDictionary(hirc => hirc.Id);
+            var routed = new HashSet<uint>();
+
+            foreach (var akEvent in shippedHircs.OfType<CAkEvent_V136>())
+            {
+                if (!nameByEventId.TryGetValue(akEvent.Id, out var eventName))
+                    throw new InvalidDataException($"Event {akEvent.Id} is not one of the names this knows how to place");
+
+                var bank = eventName.StartsWith("music_b_", StringComparison.Ordinal)
+                    ? "battle_music__core.bnk"
+                    : "campaign_music__core.bnk";
+
+                if (!destinations.TryGetValue(bank, out var hircs))
+                    destinations[bank] = hircs = [];
+
+                // Actions first, so nothing claims a hirc that comes after it.
+                foreach (var actionId in akEvent.GetActionIds())
+                {
+                    hircs.Add(byId[actionId]);
+                    routed.Add(actionId);
+                }
+
+                hircs.Add(akEvent);
+                routed.Add(akEvent.Id);
+
+                Console.WriteLine($"{eventName} ({akEvent.Id}) -> {bank}");
+            }
+
+            // Whatever is left in the mod's .bnk and not already in the testing .bnk keeps its old
+            // home, since nothing here has learned anything about where it belongs.
+            destinations["global_music__core.bnk"].AddRange(shippedHircs
+                .Where(hirc => !routed.Contains(hirc.Id) && globalHircs.All(existing => existing.Id != hirc.Id)));
         }
 
         /// <summary>
@@ -2392,6 +2458,202 @@ namespace Test.Audio
 
                 Console.WriteLine();
             }
+        }
+
+        /// <summary>
+        /// Whether every vanilla decision tree is sorted the way the merge sorts, and whether every
+        /// container survives being merged with itself byte for byte.
+        ///
+        /// A branch cannot just be tacked on the end of a block - the runtime looks a key up within a
+        /// block rather than scanning it, so the order is part of the format. The merge sorts every
+        /// block by key ascending, which is only correct if that is what vanilla does; where it is
+        /// not, the merge silently reorders vanilla's own children and the damage is invisible to any
+        /// check that compares paths, because a reordered block resolves the same paths.
+        ///
+        /// Merging a container with itself is the sharp version of the question: it adds nothing, so
+        /// anything but the original bytes back is the flattening imposing an order of its own.
+        /// </summary>
+        [TestCase("global_music__core.bnk")]
+        [TestCase("campaign_music__core.bnk")]
+        public void WhetherEveryVanillaTreeIsSortedTheWayTheMergeSortsIt(string bankName)
+        {
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith(bankName, StringComparison.OrdinalIgnoreCase));
+
+            var sections = WalkHircSections(vanilla.Bytes).ToDictionary(section => section.Id, section => section.Section);
+            var containers = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false)
+                .HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToList();
+
+            var mergeService = new Editors.Audio.Shared.Wwise.Generators.MusicSwitchContainerMergeService();
+            var unsorted = new List<string>();
+            var notIdentical = new List<string>();
+
+            foreach (var container in containers)
+            {
+                var outOfOrder = UnsortedBlocks(container);
+                if (outOfOrder.Count != 0)
+                    unsorted.Add($"{container.Id}: {outOfOrder.Count} blocks out of ascending key order, first is {outOfOrder[0]}");
+
+                var copied = mergeService.MergeContainers(container, container);
+                copied.UpdateSectionSize();
+
+                var written = copied.WriteData();
+                var original = sections[container.Id];
+
+                if (written.Length != original.Length || !written.AsSpan().SequenceEqual(original))
+                    notIdentical.Add($"{container.Id}: {written.Length} bytes against vanilla's {original.Length}, " +
+                        $"body diverges at {FirstDifference(written[9..], original[9..])}");
+            }
+
+            Console.WriteLine($"{bankName}: {containers.Count} Music Switch containers");
+            Console.WriteLine($"  blocks not in ascending key order: {unsorted.Count} containers");
+            foreach (var offender in unsorted)
+                Console.WriteLine($"    {offender}");
+
+            Console.WriteLine($"  do not survive a merge with themselves: {notIdentical.Count} containers");
+            foreach (var offender in notIdentical)
+                Console.WriteLine($"    {offender}");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unsorted, Is.Empty, "vanilla does not sort every block by ascending key");
+                Assert.That(notIdentical, Is.Empty, "a container does not survive being merged with itself");
+            });
+        }
+
+        /// <summary>Every child block whose keys are not in ascending order, as read from the bytes
+        /// the container writes.</summary>
+        static List<string> UnsortedBlocks(CAkMusicSwitchCntr_V136 container)
+        {
+            const int recordSize = 12;
+            var treeBytes = container.AkDecisionTree.WriteData();
+            var offenders = new List<string>();
+
+            void Walk(int index, int depth)
+            {
+                if (depth == container.TreeDepth)
+                    return;
+
+                var childrenIdx = BitConverter.ToUInt16(treeBytes, index * recordSize + 4);
+                var childrenCount = BitConverter.ToUInt16(treeBytes, index * recordSize + 6);
+
+                var keys = Enumerable.Range(0, childrenCount)
+                    .Select(offset => BitConverter.ToUInt32(treeBytes, (childrenIdx + offset) * recordSize))
+                    .ToList();
+
+                for (var position = 1; position < keys.Count; position++)
+                {
+                    if (keys[position] < keys[position - 1])
+                    {
+                        offenders.Add($"depth {depth}, block at {childrenIdx}: {keys[position - 1]} then {keys[position]}");
+                        break;
+                    }
+                }
+
+                for (var offset = 0; offset < childrenCount; offset++)
+                    Walk(childrenIdx + offset, depth + 1);
+            }
+
+            Walk(0, 0);
+            return offenders;
+        }
+
+        /// <summary>
+        /// Whether every chain of every slot carries the araby arm, in the .dat files that ship.
+        ///
+        /// A slot is not one place in the file. The battle theme is decided in three separate
+        /// functions and the ambient chain is repeated nine times, and a slot only works if every one
+        /// of its chains answers - a culture the main dispatch knows but a second route does not is a
+        /// culture that resolves down one path and falls off another. Prebattle plays and battle does
+        /// not, so what matters is which chains actually got the arm.
+        /// </summary>
+        [Test]
+        public void WhetherEveryChainOfEverySlotCarriesTheArabyArm()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var files = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false).GetAllFiles();
+
+            foreach (var name in new[] { "battle_music.dat", "campaign_music.dat" })
+            {
+                var packFile = files.Single(file => file.Key.EndsWith(name, StringComparison.OrdinalIgnoreCase)).Value;
+                Console.WriteLine($"\n================ {name} ================");
+
+                foreach (var slot in MusicDatCultureWiring.FindSlots(MusicDatParser.Parse(packFile)))
+                {
+                    var withArm = slot.Chains
+                        .Where(chain => chain.Cases.Any(item => string.Equals(item.MatchKey, "araby", StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+
+                    Console.WriteLine($"\n-- {slot.Title}  (event prefix {slot.EventPrefix})");
+                    Console.WriteLine($"   {withArm.Count} of {slot.Chains.Count} chains carry an araby arm");
+
+                    foreach (var chain in slot.Chains)
+                    {
+                        var araby = chain.Cases.FirstOrDefault(item => string.Equals(item.MatchKey, "araby", StringComparison.OrdinalIgnoreCase));
+                        var cathay = chain.Cases.FirstOrDefault(item => string.Equals(item.MatchKey, "cathay", StringComparison.OrdinalIgnoreCase));
+
+                        Console.WriteLine($"      {chain.FunctionName} (matched against {chain.MatchedAgainst}, {chain.Cases.Count} arms)");
+                        Console.WriteLine($"          cathay: {(cathay == null ? "ABSENT" : cathay.SoundEvent ?? $"<culture:{cathay.MusicalCulture}>")}");
+                        Console.WriteLine($"          araby:  {(araby == null ? "ABSENT" : araby.SoundEvent ?? $"<culture:{araby.MusicalCulture}>")}");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Which vanilla .bnk holds each music Event, against which .bnk the mod puts its own in.
+        ///
+        /// The script posts music_b_faction_araby and the containers now resolve araby, so the piece
+        /// left is whether the Event is somewhere battle can see it. Banks are loaded per context, and
+        /// an Event that is not in a .bnk loaded at the time is an Event that goes nowhere. The mod
+        /// puts all six of its Events in global_music__core.bnk; vanilla's own placement is the answer
+        /// to where they should be.
+        /// </summary>
+        [Test]
+        public void WhichVanillaBankHoldsEachMusicEvent()
+        {
+            var wanted = new[]
+            {
+                "music_b_faction_cathay", "music_b_faction_empire", "music_b_faction_kislev",
+                "music_c_subculture_cathay", "music_c_ams_pulse_perc_cathay"
+            }.ToDictionary(WwiseHash.Compute, name => name);
+
+            var found = new Dictionary<string, List<string>>();
+
+            foreach (var packPath in Directory.GetFiles(Path.Combine(GameDirectory, "data"), "audio*.pack"))
+            {
+                foreach (var (path, bytes) in VanillaBankReader.ReadMusicBanks(packPath))
+                {
+                    List<HircItem> hircs;
+                    try
+                    {
+                        hircs = BnkFile.CreateFromBytes(bytes, path, false).HircChunk?.HircItems ?? [];
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    foreach (var hirc in hircs.Where(hirc => wanted.ContainsKey(hirc.Id)))
+                    {
+                        var name = wanted[hirc.Id];
+                        if (!found.TryGetValue(name, out var places))
+                            found[name] = places = [];
+
+                        places.Add($"{Path.GetFileName(packPath)}  {Path.GetFileName(path)}  ({hirc.HircType})");
+                    }
+                }
+            }
+
+            foreach (var (name, places) in found.OrderBy(entry => entry.Key))
+            {
+                Console.WriteLine($"\n{name} ({WwiseHash.Compute(name)})");
+                foreach (var place in places)
+                    Console.WriteLine($"    {place}");
+            }
+
+            foreach (var name in wanted.Values.Where(name => !found.ContainsKey(name)))
+                Console.WriteLine($"\n{name}: not found in any .bnk");
         }
 
         static void Record(Dictionary<string, (int Total, int Mismatched, string FirstExample)> results, string type, bool identical, string example)
