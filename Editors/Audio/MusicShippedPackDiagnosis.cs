@@ -1117,6 +1117,34 @@ namespace Test.Audio
         /// </summary>
         [Test]
         public void BuildAPackThatReplacesTheVanillaMusicBankOutright()
+            => WriteReplacementBankPack(true, true, "araby_music_replacing_vanilla_bank.pack");
+
+        /// <summary>
+        /// The replaced .bnk with the mod's hierarchy appended but vanilla's containers left alone.
+        ///
+        /// Replacing the .bnk killed every piece of music in the game, main menu included, and
+        /// vanilla's own hircs all write back byte for byte while a splice that changes nothing
+        /// reproduces the file exactly - so the fault is in one of the two things the splice actually
+        /// changed. This isolates the appended hircs. Nothing points at them, so if Wwise accepts the
+        /// bank the game sounds completely normal; if one of them is malformed enough to make Wwise
+        /// throw the whole .bnk away, all music dies again.
+        /// </summary>
+        [Test]
+        public void BuildAPackThatOnlyAppendsTheModsHierarchy()
+            => WriteReplacementBankPack(false, true, "araby_music_appended_hierarchy_only.pack");
+
+        /// <summary>
+        /// The replaced .bnk with the merged containers but none of the hircs they name.
+        ///
+        /// The other half of the bisection. The containers point at nodes that are not in the bank,
+        /// so Araby cannot play either way - what is being listened for is whether the rest of the
+        /// game's music survives a container this codebase re-wrote.
+        /// </summary>
+        [Test]
+        public void BuildAPackThatOnlySwapsTheContainers()
+            => WriteReplacementBankPack(true, false, "araby_music_swapped_containers_only.pack");
+
+        void WriteReplacementBankPack(bool includeMergedContainers, bool includeGeneratedHircs, string outputName)
         {
             using var provider = VanillaBankReader.CreateProvider(GameDirectory);
             var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
@@ -1125,8 +1153,14 @@ namespace Test.Audio
                 .Single(file => file.Key.EndsWith("global_music_1_music_araby_for_testing.bnk", StringComparison.OrdinalIgnoreCase));
 
             var modBnk = BnkFile.CreateFromBytes(testingBank.Value.DataSource.ReadData(), testingBank.Key, false);
-            var mergedContainers = modBnk.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id);
-            var generatedHircs = modBnk.HircChunk.HircItems.Where(hirc => hirc is not CAkMusicSwitchCntr_V136).ToList();
+
+            var mergedContainers = includeMergedContainers
+                ? modBnk.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id)
+                : [];
+
+            var generatedHircs = includeGeneratedHircs
+                ? modBnk.HircChunk.HircItems.Where(hirc => hirc is not CAkMusicSwitchCntr_V136).ToList()
+                : [];
 
             Console.WriteLine($"merged containers: {string.Join(", ", mergedContainers.Keys)}");
             Console.WriteLine($"generated hircs: {string.Join(", ", generatedHircs.Select(hirc => $"{hirc.HircType} {hirc.Id}"))}");
@@ -1159,6 +1193,17 @@ namespace Test.Audio
 
             modPack.IsReadOnly = false;
             var packFileService = provider.GetRequiredService<IPackFileService>();
+
+            // The mod's own .bnks define the same hircs as the .bnk being replaced. Shipping them
+            // alongside it hands Wwise two definitions of every one of those ids, which is its own
+            // reason to throw a bank away and would sit on top of whatever is being measured here.
+            // The replacement .bnk carries the whole hierarchy, so none of them are needed.
+            foreach (var (path, file) in modPack.GetAllFiles().Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)).ToList())
+            {
+                packFileService.DeleteFile(modPack, file);
+                Console.WriteLine($"dropped {path}");
+            }
+
             packFileService.AddFilesToPack(modPack,
             [
                 new NewPackFileEntry("audio\\wwise",
@@ -1166,7 +1211,7 @@ namespace Test.Audio
                         new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt)))
             ]);
 
-            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_replacing_vanilla_bank.pack");
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, outputName);
             packFileService.SavePackContainer(modPack, outputPath, false,
                 Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
 
@@ -1528,6 +1573,164 @@ namespace Test.Audio
                         break;
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Whether this codebase can write a vanilla hirc back as the bytes it read.
+        ///
+        /// Replacing a vanilla .bnk killed every piece of music in the game, main menu included, so
+        /// the file is being loaded and Wwise is rejecting it. Only two things in it were not
+        /// vanilla's own bytes: the two re-written switch containers and the appended hircs. This
+        /// reads each of vanilla's hircs, writes it straight back with nothing changed, and compares.
+        /// Anything that does not come back identical is a writer that cannot be trusted to emit a
+        /// hirc the game will accept - including the ones the generator writes from scratch.
+        /// </summary>
+        [Test]
+        public void WhetherVanillaHircsSurviveBeingWrittenBack()
+        {
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var results = new Dictionary<string, (int Total, int Mismatched, string FirstExample)>();
+
+            foreach (var (index, id, section) in WalkHircSections(vanilla.Bytes))
+            {
+                HircItem hirc;
+                try
+                {
+                    // 2147483784 is the bank generator version WH3 actually writes; 136 is only
+                    // wwiser's nickname for it and the factory does not answer to it.
+                    hirc = HircItem.ReadData(vanilla.Path, new Shared.ByteParsing.ByteChunk(section), 2147483784, 0, false, index);
+                }
+                catch (Exception exception)
+                {
+                    Record(results, "<unreadable>", false, $"{id}: {exception.Message}");
+                    continue;
+                }
+
+                byte[] written;
+                try
+                {
+                    written = hirc.WriteData();
+                }
+                catch (Exception exception)
+                {
+                    Record(results, hirc.GetType().Name, false, $"{id}: write threw {exception.GetType().Name} {exception.Message}");
+                    continue;
+                }
+
+                var identical = written.Length == section.Length && written.AsSpan().SequenceEqual(section);
+                Record(results, hirc.GetType().Name, identical,
+                    identical ? null : $"{id}: wrote {written.Length} bytes, read {section.Length}, first differs at {FirstDifference(written, section)}");
+            }
+
+            Console.WriteLine($"{vanilla.Path}\n");
+            Console.WriteLine($"{"type",-40} {"total",8} {"bad",8}   example");
+
+            foreach (var (type, result) in results.OrderByDescending(entry => entry.Value.Mismatched).ThenBy(entry => entry.Key))
+                Console.WriteLine($"{type,-40} {result.Total,8} {result.Mismatched,8}   {result.FirstExample}");
+
+            var switchContainers = results.TryGetValue(nameof(CAkMusicSwitchCntr_V136), out var containerResult) ? containerResult : default;
+            Console.WriteLine($"\nswitch containers: {switchContainers.Mismatched} of {switchContainers.Total} do not round trip");
+        }
+
+        /// <summary>
+        /// Whether the splice itself is sound, checked without the game.
+        ///
+        /// Vanilla's own hircs write back byte for byte, so nothing carried across can be the reason
+        /// the replacement .bnk killed every piece of music. That leaves the file structure the splice
+        /// builds around them. A splice that changes nothing must come back byte identical to vanilla;
+        /// if it does not, the chunk table or the tail is wrong, and everything after HIRC - the
+        /// bank's other chunks included - is being handed to Wwise misaligned.
+        /// </summary>
+        [Test]
+        public void WhetherASpliceThatChangesNothingComesBackIdentical()
+        {
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var passthrough = SpliceHircs(vanilla.Bytes, [], []);
+
+            Console.WriteLine($"vanilla {vanilla.Bytes.Length} bytes, passthrough {passthrough.Length} bytes");
+            Console.WriteLine($"chunks vanilla:     {string.Join(", ", WalkChunks(vanilla.Bytes))}");
+            Console.WriteLine($"chunks passthrough: {string.Join(", ", WalkChunks(passthrough))}");
+
+            if (passthrough.Length == vanilla.Bytes.Length && !passthrough.AsSpan().SequenceEqual(vanilla.Bytes))
+                Console.WriteLine($"same length but differs at {FirstDifference(passthrough, vanilla.Bytes)}");
+
+            Assert.That(passthrough, Is.EqualTo(vanilla.Bytes), "a splice that changes nothing did not reproduce vanilla");
+        }
+
+        /// <summary>Every top level chunk as tag and declared length, plus whether the walk lands
+        /// exactly on the end of the file. A walk that overruns or stops short means some chunk's
+        /// declared length disagrees with what is actually there.</summary>
+        static IEnumerable<string> WalkChunks(byte[] bankBytes)
+        {
+            var offset = 0;
+
+            while (offset + 8 <= bankBytes.Length)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(bankBytes, offset, 4);
+                var length = BitConverter.ToUInt32(bankBytes, offset + 4);
+                yield return $"{tag}:{length}";
+                offset += 8 + (int)length;
+            }
+
+            yield return offset == bankBytes.Length ? "(ends exactly)" : $"(ends at {offset} of {bankBytes.Length})";
+        }
+
+        static void Record(Dictionary<string, (int Total, int Mismatched, string FirstExample)> results, string type, bool identical, string example)
+        {
+            results.TryGetValue(type, out var current);
+            results[type] = (current.Total + 1,
+                current.Mismatched + (identical ? 0 : 1),
+                current.FirstExample ?? example);
+        }
+
+        static string FirstDifference(byte[] left, byte[] right)
+        {
+            var shared = Math.Min(left.Length, right.Length);
+            for (var offset = 0; offset < shared; offset++)
+                if (left[offset] != right[offset])
+                    return $"byte {offset} ({left[offset]:x2} vs {right[offset]:x2})";
+            return $"byte {shared} (length only)";
+        }
+
+        /// <summary>Every hirc in the HIRC chunk as the raw bytes it occupies, header included.</summary>
+        static IEnumerable<(uint Index, uint Id, byte[] Section)> WalkHircSections(byte[] bankBytes)
+        {
+            var offset = 0;
+            var hircChunkStart = -1;
+
+            while (offset + 8 <= bankBytes.Length)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(bankBytes, offset, 4);
+                var length = BitConverter.ToUInt32(bankBytes, offset + 4);
+
+                if (tag == "HIRC")
+                {
+                    hircChunkStart = offset;
+                    break;
+                }
+
+                offset += 8 + (int)length;
+            }
+
+            if (hircChunkStart == -1)
+                throw new InvalidDataException("no HIRC chunk");
+
+            var itemCount = BitConverter.ToUInt32(bankBytes, hircChunkStart + 8);
+            var cursor = hircChunkStart + 12;
+
+            for (uint index = 0; index < itemCount; index++)
+            {
+                var sectionSize = BitConverter.ToUInt32(bankBytes, cursor + 1);
+                var id = BitConverter.ToUInt32(bankBytes, cursor + 5);
+                var totalLength = 5 + (int)sectionSize;
+
+                yield return (index, id, bankBytes[cursor..(cursor + totalLength)]);
+                cursor += totalLength;
             }
         }
     }
