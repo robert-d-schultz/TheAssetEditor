@@ -1134,53 +1134,125 @@ namespace Test.Audio
             var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
                 .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
 
-            var vanillaBnk = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false);
-            var vanillaHircs = vanillaBnk.HircChunk.HircItems;
-            Console.WriteLine($"\nvanilla {vanilla.Path}: {vanillaHircs.Count} hircs");
-
-            var swapped = 0;
-            for (var index = 0; index < vanillaHircs.Count; index++)
-            {
-                if (mergedContainers.TryGetValue(vanillaHircs[index].Id, out var merged))
-                {
-                    vanillaHircs[index] = merged;
-                    swapped++;
-                }
-            }
-
-            Assert.That(swapped, Is.EqualTo(mergedContainers.Count), "not every merged container found its vanilla counterpart");
-
-            // In front of everything, so a node is defined before the container that claims it.
-            vanillaHircs.InsertRange(0, generatedHircs);
-            Console.WriteLine($"swapped {swapped} container(s), added {generatedHircs.Count} hirc(s), now {vanillaHircs.Count}");
-
-            // Vanilla's own header, because the .bnk is being shipped under vanilla's name and its id
-            // is the hash of that name.
-            var bkhdChunkBytes = Shared.GameFormats.Wwise.Bkhd.BkhdChunk.WriteData(vanillaBnk.BkhdChunk);
-            var hircChunkBytes = HircChunk.WriteData(
-                Editors.Audio.Shared.Wwise.Generators.Hirc.HircChunkGenerator.GenerateHircChunk(vanillaHircs),
-                vanillaBnk.BkhdChunk.AkBankHeader.BankGeneratorVersion);
-
-            using var memStream = new MemoryStream();
-            memStream.Write(bkhdChunkBytes);
-            memStream.Write(hircChunkBytes);
-            var rebuilt = memStream.ToArray();
+            var rebuilt = SpliceHircs(vanilla.Bytes, mergedContainers, generatedHircs);
 
             var reparsed = BnkFile.CreateFromBytes(rebuilt, vanilla.Path, false);
-            Assert.That(reparsed.HircChunk.HircItems, Has.Count.EqualTo(vanillaHircs.Count),
-                "the replacement .bnk did not read back with every hirc it was given");
+            var reparsedContainers = reparsed.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(x => x.Id);
 
-            Console.WriteLine($"rebuilt {rebuilt.Length} bytes, reparsed {reparsed.HircChunk.HircItems.Count} hircs");
+            Assert.Multiple(() =>
+            {
+                foreach (var (containerId, merged) in mergedContainers)
+                {
+                    Assert.That(reparsedContainers.ContainsKey(containerId), Is.True, $"container {containerId} is missing");
+                    Assert.That(reparsedContainers[containerId].AkDecisionTree.DecisionTree.Nodes.Count,
+                        Is.EqualTo(merged.AkDecisionTree.DecisionTree.Nodes.Count),
+                        $"container {containerId} did not survive the splice with its tree intact");
+                }
+
+                foreach (var generated in generatedHircs)
+                    Assert.That(reparsed.HircChunk.HircItems.Any(hirc => hirc.Id == generated.Id), Is.True,
+                        $"generated hirc {generated.Id} is missing");
+            });
+
+            Console.WriteLine($"rebuilt {rebuilt.Length} bytes (vanilla was {vanilla.Bytes.Length}), " +
+                $"reparsed {reparsed.HircChunk.HircItems.Count} hircs");
 
             modPack.IsReadOnly = false;
-            modPack.Add(new Shared.Core.PackFiles.Models.PackFile("global_music__core.bnk",
-                new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt)), "audio\\wwise");
+            var packFileService = provider.GetRequiredService<IPackFileService>();
+            packFileService.AddFilesToPack(modPack,
+            [
+                new NewPackFileEntry("audio\\wwise",
+                    new Shared.Core.PackFiles.Models.PackFile("global_music__core.bnk",
+                        new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt)))
+            ]);
 
             var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_replacing_vanilla_bank.pack");
-            provider.GetRequiredService<IPackFileService>().SavePackContainer(modPack, outputPath, false,
+            packFileService.SavePackContainer(modPack, outputPath, false,
                 Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
 
             Console.WriteLine($"\nWrote {outputPath}");
+        }
+
+        /// <summary>
+        /// Vanilla's .bnk bytes with some hircs swapped and others appended, spliced rather than
+        /// rebuilt. Re-serialising the whole file would put every one of its five thousand hircs
+        /// through writers that have only ever been asked to write generated ones, and a single type
+        /// that does not round trip byte for byte misaligns everything after it. Only the hircs
+        /// actually being changed are written, so vanilla's bytes are carried across untouched.
+        /// </summary>
+        static byte[] SpliceHircs(byte[] vanillaBytes, Dictionary<uint, CAkMusicSwitchCntr_V136> replacements, List<HircItem> additions)
+        {
+            // The HIRC chunk, found by walking the top level chunk table.
+            var offset = 0;
+            var hircChunkStart = -1;
+            uint hircChunkSize = 0;
+
+            while (offset + 8 <= vanillaBytes.Length)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(vanillaBytes, offset, 4);
+                var length = BitConverter.ToUInt32(vanillaBytes, offset + 4);
+
+                if (tag == "HIRC")
+                {
+                    hircChunkStart = offset;
+                    hircChunkSize = length;
+                    break;
+                }
+
+                offset += 8 + (int)length;
+            }
+
+            if (hircChunkStart == -1)
+                throw new InvalidDataException("no HIRC chunk");
+
+            var itemCount = BitConverter.ToUInt32(vanillaBytes, hircChunkStart + 8);
+            var cursor = hircChunkStart + 12;
+
+            using var body = new MemoryStream();
+            var replaced = 0;
+
+            for (uint index = 0; index < itemCount; index++)
+            {
+                var sectionSize = BitConverter.ToUInt32(vanillaBytes, cursor + 1);
+                var id = BitConverter.ToUInt32(vanillaBytes, cursor + 5);
+                var totalLength = 5 + (int)sectionSize;
+
+                if (replacements.TryGetValue(id, out var replacement))
+                {
+                    replacement.UpdateSectionSize();
+                    body.Write(replacement.WriteData());
+                    replaced++;
+                }
+                else
+                    body.Write(vanillaBytes, cursor, totalLength);
+
+                cursor += totalLength;
+            }
+
+            if (replaced != replacements.Count)
+                throw new InvalidDataException($"only {replaced} of {replacements.Count} hircs to replace were found");
+
+            foreach (var addition in additions)
+            {
+                addition.UpdateSectionSize();
+                body.Write(addition.WriteData());
+            }
+
+            var bodyBytes = body.ToArray();
+
+            using var output = new MemoryStream();
+            output.Write(vanillaBytes, 0, hircChunkStart);
+            output.Write(System.Text.Encoding.ASCII.GetBytes("HIRC"));
+            output.Write(BitConverter.GetBytes((uint)(bodyBytes.Length + 4)));
+            output.Write(BitConverter.GetBytes(itemCount + (uint)additions.Count));
+            output.Write(bodyBytes);
+
+            // Whatever followed the HIRC chunk in the original file.
+            var afterHirc = hircChunkStart + 8 + (int)hircChunkSize;
+            if (afterHirc < vanillaBytes.Length)
+                output.Write(vanillaBytes, afterHirc, vanillaBytes.Length - afterHirc);
+
+            return output.ToArray();
         }
 
         /// <summary>Drops every branch keyed on one of the given keys, at whatever depth it sits.</summary>
