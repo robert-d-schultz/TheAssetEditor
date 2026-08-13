@@ -1210,6 +1210,11 @@ namespace Test.Audio
                     Assert.That(reparsed.HircChunk.HircItems.Any(item => item.Id == hirc.Id), Is.True,
                         $"{hirc.HircType} {hirc.Id} did not survive the splice into {vanillaName}");
 
+                // Vanilla holds to this for every one of its own relations, so a rebuilt .bnk that
+                // breaks it is not a .bnk the game has ever been asked to load.
+                Assert.That(ChildrenAfterTheirParents(reparsed.HircChunk.HircItems), Is.Empty,
+                    $"{vanillaName} puts a hirc after something that claims it as a child");
+
                 newFiles.Add(new NewPackFileEntry("audio\\wwise",
                     new Shared.Core.PackFiles.Models.PackFile(vanillaName,
                         new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt))));
@@ -1306,6 +1311,25 @@ namespace Test.Audio
 
             using var body = new MemoryStream();
             var replaced = 0;
+            var written = false;
+
+            // Vanilla never puts a hirc after something that claims it as a child - across both music
+            // .bnks, all 5282 parent-child relations run the other way. So the additions go in ahead of
+            // the first hirc being replaced, since a replaced hirc is the only thing that can name one
+            // of them, rather than on the end where they would sit after their own parents.
+            void WriteAdditions()
+            {
+                if (written)
+                    return;
+
+                foreach (var addition in additions)
+                {
+                    addition.UpdateSectionSize();
+                    body.Write(addition.WriteData());
+                }
+
+                written = true;
+            }
 
             for (uint index = 0; index < itemCount; index++)
             {
@@ -1315,6 +1339,7 @@ namespace Test.Audio
 
                 if (replacements.TryGetValue(id, out var replacement))
                 {
+                    WriteAdditions();
                     replacement.UpdateSectionSize();
                     body.Write(replacement.WriteData());
                     replaced++;
@@ -1328,11 +1353,8 @@ namespace Test.Audio
             if (replaced != replacements.Count)
                 throw new InvalidDataException($"only {replaced} of {replacements.Count} hircs to replace were found");
 
-            foreach (var addition in additions)
-            {
-                addition.UpdateSectionSize();
-                body.Write(addition.WriteData());
-            }
+            // Nothing claims them, so the end is as good a place as any.
+            WriteAdditions();
 
             var bodyBytes = body.ToArray();
 
@@ -1860,6 +1882,232 @@ namespace Test.Audio
                     Console.WriteLine($"    {hirc.HircType,-28} {hirc.Id}");
             }
         }
+
+        /// <summary>
+        /// Every root to leaf path in the merged containers against vanilla's, read out of the flat
+        /// node array in the bytes that ship rather than out of the nested model.
+        ///
+        /// Replacing the two containers is what makes Wwise throw global_music__core.bnk away - the
+        /// stage that only appends the mod's hierarchy leaves the game sounding normal, the stage that
+        /// also swaps the containers silences it. Their bytes differ from vanilla's only by the one
+        /// child the merge adds, so the damage is not in the size of anything. This enumerates what
+        /// the tree actually resolves to, path by path, and says which of vanilla's own paths the
+        /// merge changed or lost.
+        /// </summary>
+        [Test]
+        public void WhetherVanillaPathsSurviveTheMergeInTheWrittenBytes()
+        {
+            var stagePack = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_stage_containers.pack");
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var merged = VanillaBankReader.OpenPack(provider, stagePack, markAsCa: false).GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var vanillaContainers = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false)
+                .HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id);
+
+            var mergedContainers = BnkFile.CreateFromBytes(merged.Value.DataSource.ReadData(), merged.Key, false)
+                .HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id);
+
+            foreach (var containerId in new uint[] { 26264058, 698158058 })
+            {
+                var before = PathsOf(vanillaContainers[containerId]);
+                var after = PathsOf(mergedContainers[containerId]);
+
+                Console.WriteLine($"\n================ container {containerId} ================");
+                Console.WriteLine($"vanilla {before.Count} paths, merged {after.Count} paths");
+
+                var lost = before.Where(path => !after.ContainsKey(path.Key)).ToList();
+                var changed = before.Where(path => after.TryGetValue(path.Key, out var now) && now != path.Value).ToList();
+                var added = after.Where(path => !before.ContainsKey(path.Key)).ToList();
+
+                foreach (var path in lost)
+                    Console.WriteLine($"    LOST    [{path.Key}] -> {path.Value}");
+
+                foreach (var path in changed)
+                    Console.WriteLine($"    CHANGED [{path.Key}] {path.Value} -> {after[path.Key]}");
+
+                foreach (var path in added)
+                    Console.WriteLine($"    added   [{path.Key}] -> {path.Value}");
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(lost, Is.Empty, $"container {containerId} lost vanilla paths");
+                    Assert.That(changed, Is.Empty, $"container {containerId} changed where vanilla paths lead");
+                });
+            }
+        }
+
+        /// <summary>Every root to leaf path as the key sequence that reaches it and the audio node it
+        /// names, walked over the twelve byte records the container writes.</summary>
+        static Dictionary<string, uint> PathsOf(CAkMusicSwitchCntr_V136 container)
+        {
+            const int recordSize = 12;
+            var treeBytes = container.AkDecisionTree.WriteData();
+            var paths = new Dictionary<string, uint>();
+
+            void Walk(int index, int depth, List<uint> keys)
+            {
+                if (depth == container.TreeDepth)
+                {
+                    paths[string.Join(" / ", keys)] = BitConverter.ToUInt32(treeBytes, index * recordSize + 4);
+                    return;
+                }
+
+                var childrenIdx = BitConverter.ToUInt16(treeBytes, index * recordSize + 4);
+                var childrenCount = BitConverter.ToUInt16(treeBytes, index * recordSize + 6);
+
+                for (var offset = 0; offset < childrenCount; offset++)
+                {
+                    var child = childrenIdx + offset;
+                    Walk(child, depth + 1, [.. keys, BitConverter.ToUInt32(treeBytes, child * recordSize)]);
+                }
+            }
+
+            Walk(0, 0, []);
+            return paths;
+        }
+
+        /// <summary>
+        /// Two things the stage that only appends the mod's hierarchy never put to the test.
+        ///
+        /// First, the copy that rebuilds a container. Merging a container with itself adds nothing, so
+        /// it has to come back as the bytes it went in as; anything the copy drops or reorders shows
+        /// up here with no branch to confuse it.
+        ///
+        /// Second, the parent links. Appending a node nobody claims is free - Wwise never tries to
+        /// attach it. The moment a container lists it as a child, the node's own parent has to point
+        /// back at that container, and the two containers here are different containers.
+        /// </summary>
+        [Test]
+        public void WhetherTheContainerCopyAndTheParentLinksHold()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+
+            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var vanillaSections = WalkHircSections(vanilla.Bytes).ToDictionary(section => section.Id, section => section.Section);
+            var vanillaHircs = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false).HircChunk.HircItems;
+            var vanillaContainers = vanillaHircs.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id);
+
+            var mergeService = new Editors.Audio.Shared.Wwise.Generators.MusicSwitchContainerMergeService();
+
+            Console.WriteLine("merging a container with itself and comparing to vanilla's bytes:\n");
+
+            foreach (var containerId in new uint[] { 26264058, 698158058 })
+            {
+                var container = vanillaContainers[containerId];
+                var copied = mergeService.MergeContainers(container, container);
+                copied.UpdateSectionSize();
+
+                var written = copied.WriteData();
+                var original = vanillaSections[containerId];
+                var identical = written.Length == original.Length && written.AsSpan().SequenceEqual(original);
+
+                Console.WriteLine(identical
+                    ? $"    {containerId}  identical"
+                    : $"    {containerId}  DIFFERS: {written.Length} bytes against vanilla's {original.Length}, " +
+                      $"body diverges at {FirstDifference(written[9..], original[9..])}");
+            }
+
+            Console.WriteLine("\nparent links of what each container claims as a child:\n");
+
+            var stagePack = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_stage_containers.pack");
+            var stageBank = VanillaBankReader.OpenPack(provider, stagePack, markAsCa: false).GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var stageHircs = BnkFile.CreateFromBytes(stageBank.Value.DataSource.ReadData(), stageBank.Key, false).HircChunk.HircItems;
+            var byId = stageHircs.ToDictionary(hirc => hirc.Id);
+
+            foreach (var container in stageHircs.OfType<CAkMusicSwitchCntr_V136>().Where(container => container.Id is 26264058 or 698158058))
+            {
+                Console.WriteLine($"  container {container.Id}");
+
+                foreach (var childId in container.MusicTransNodeParams.MusicNodeParams.Children.ChildIds)
+                {
+                    if (!byId.TryGetValue(childId, out var child))
+                    {
+                        Console.WriteLine($"    {childId}  NOT IN BANK");
+                        continue;
+                    }
+
+                    var parentId = ParentOf(child);
+                    var isNew = !vanillaSections.ContainsKey(childId);
+                    var note = parentId == container.Id ? "ok" : $"POINTS AT {parentId}";
+                    Console.WriteLine($"    {child.HircType,-24} {childId,-12} parent {parentId,-12} {note}{(isNew ? "   <- added by the mod" : "")}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether vanilla ever puts a hirc after something that claims it as a child.
+        ///
+        /// The splice appends the mod's hircs at the end of the HIRC list, which puts them after the
+        /// containers that name them. That costs nothing while nobody claims them - the stage that only
+        /// appends leaves the game normal - and it is exactly what changes when the containers start
+        /// claiming them, which is the stage that goes silent. If vanilla never does this, the order
+        /// is the difference.
+        /// </summary>
+        [Test]
+        public void WhetherVanillaEverPutsAChildAfterItsParent()
+        {
+            foreach (var bankName in new[] { "global_music__core.bnk", "campaign_music__core.bnk" })
+            {
+                var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                    .First(bank => bank.Path.EndsWith(bankName, StringComparison.OrdinalIgnoreCase));
+
+                var hircs = BnkFile.CreateFromBytes(vanilla.Bytes, vanilla.Path, false).HircChunk.HircItems;
+                var positionOf = hircs.Select((hirc, position) => (hirc.Id, position))
+                    .GroupBy(entry => entry.Id)
+                    .ToDictionary(group => group.Key, group => group.First().position);
+
+                var relations = hircs.Sum(hirc => ChildrenOf(hirc).Count(childId => positionOf.ContainsKey(childId)));
+                var childAfterParent = ChildrenAfterTheirParents(hircs);
+
+                Console.WriteLine($"{bankName}: {hircs.Count} hircs, {relations} parent-child relations inside the .bnk, " +
+                    $"{childAfterParent.Count} where the child comes after the parent");
+
+                foreach (var offender in childAfterParent.Take(10))
+                    Console.WriteLine($"    {offender}");
+            }
+        }
+
+        /// <summary>Every relation where a hirc sits later in the .bnk than something claiming it as
+        /// a child.</summary>
+        static List<string> ChildrenAfterTheirParents(List<HircItem> hircs)
+        {
+            var positionOf = hircs.Select((hirc, position) => (hirc.Id, position))
+                .GroupBy(entry => entry.Id)
+                .ToDictionary(group => group.Key, group => group.First().position);
+
+            return
+            [
+                .. from entry in hircs.Select((hirc, position) => (hirc, position))
+                   from childId in ChildrenOf(entry.hirc)
+                   where positionOf.TryGetValue(childId, out var childPosition) && childPosition > entry.position
+                   select $"{entry.hirc.HircType} {entry.hirc.Id} at {entry.position} claims {childId} at {positionOf[childId]}"
+            ];
+        }
+
+        static IEnumerable<uint> ChildrenOf(HircItem hirc) => hirc switch
+        {
+            CAkMusicSwitchCntr_V136 switchCntr => switchCntr.MusicTransNodeParams.MusicNodeParams.Children.ChildIds,
+            CAkMusicRanSeqCntr_V136 ranSeq => ranSeq.MusicTransNodeParams.MusicNodeParams.Children.ChildIds,
+            CAkMusicSegment_V136 segment => segment.MusicNodeParams.Children.ChildIds,
+            _ => []
+        };
+
+        static uint ParentOf(HircItem hirc) => hirc switch
+        {
+            CAkMusicRanSeqCntr_V136 ranSeq => ranSeq.MusicTransNodeParams.MusicNodeParams.NodeBaseParams.DirectParentId,
+            CAkMusicSwitchCntr_V136 switchCntr => switchCntr.MusicTransNodeParams.MusicNodeParams.NodeBaseParams.DirectParentId,
+            CAkMusicSegment_V136 segment => segment.MusicNodeParams.NodeBaseParams.DirectParentId,
+            _ => uint.MaxValue
+        };
 
         static void Record(Dictionary<string, (int Total, int Mismatched, string FirstExample)> results, string type, bool identical, string example)
         {
