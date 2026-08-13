@@ -1117,105 +1117,144 @@ namespace Test.Audio
         /// </summary>
         [Test]
         public void BuildAPackThatReplacesTheVanillaMusicBankOutright()
-            => WriteReplacementBankPack(true, true, "araby_music_replacing_vanilla_bank.pack");
-
-        /// <summary>
-        /// The replaced .bnk with the mod's hierarchy appended but vanilla's containers left alone.
-        ///
-        /// Replacing the .bnk killed every piece of music in the game, main menu included, and
-        /// vanilla's own hircs all write back byte for byte while a splice that changes nothing
-        /// reproduces the file exactly - so the fault is in one of the two things the splice actually
-        /// changed. This isolates the appended hircs. Nothing points at them, so if Wwise accepts the
-        /// bank the game sounds completely normal; if one of them is malformed enough to make Wwise
-        /// throw the whole .bnk away, all music dies again.
-        /// </summary>
-        [Test]
-        public void BuildAPackThatOnlyAppendsTheModsHierarchy()
-            => WriteReplacementBankPack(false, true, "araby_music_appended_hierarchy_only.pack");
-
-        /// <summary>
-        /// The replaced .bnk with the merged containers but none of the hircs they name.
-        ///
-        /// The other half of the bisection. The containers point at nodes that are not in the bank,
-        /// so Araby cannot play either way - what is being listened for is whether the rest of the
-        /// game's music survives a container this codebase re-wrote.
-        /// </summary>
-        [Test]
-        public void BuildAPackThatOnlySwapsTheContainers()
-            => WriteReplacementBankPack(true, false, "araby_music_swapped_containers_only.pack");
-
-        void WriteReplacementBankPack(bool includeMergedContainers, bool includeGeneratedHircs, string outputName)
         {
             using var provider = VanillaBankReader.CreateProvider(GameDirectory);
             var modPack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+            var packFileService = provider.GetRequiredService<IPackFileService>();
+            modPack.IsReadOnly = false;
 
-            var testingBank = modPack.GetAllFiles()
-                .Single(file => file.Key.EndsWith("global_music_1_music_araby_for_testing.bnk", StringComparison.OrdinalIgnoreCase));
+            var modBanks = modPack.GetAllFiles()
+                .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(file => file.Key, file => file.Value);
 
-            var modBnk = BnkFile.CreateFromBytes(testingBank.Value.DataSource.ReadData(), testingBank.Key, false);
+            // Every vanilla .bnk a testing .bnk is named after gets replaced, not just the global one.
+            // Battle music and the campaign layer live in different vanilla .bnks, and replacing one
+            // of them leaves the other's branches nowhere.
+            var replacedIds = new HashSet<uint>();
+            var newFiles = new List<NewPackFileEntry>();
 
-            var mergedContainers = includeMergedContainers
-                ? modBnk.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(container => container.Id)
-                : [];
-
-            var generatedHircs = includeGeneratedHircs
-                ? modBnk.HircChunk.HircItems.Where(hirc => hirc is not CAkMusicSwitchCntr_V136).ToList()
-                : [];
-
-            Console.WriteLine($"merged containers: {string.Join(", ", mergedContainers.Keys)}");
-            Console.WriteLine($"generated hircs: {string.Join(", ", generatedHircs.Select(hirc => $"{hirc.HircType} {hirc.Id}"))}");
-
-            var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
-                .First(bank => bank.Path.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
-
-            var rebuilt = SpliceHircs(vanilla.Bytes, mergedContainers, generatedHircs);
-
-            var reparsed = BnkFile.CreateFromBytes(rebuilt, vanilla.Path, false);
-            var reparsedContainers = reparsed.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>().ToDictionary(x => x.Id);
-
-            Assert.Multiple(() =>
+            foreach (var (modPath, modFile) in modBanks.Where(bank => bank.Key.Contains("_for_testing.bnk", StringComparison.OrdinalIgnoreCase)))
             {
-                foreach (var (containerId, merged) in mergedContainers)
+                var vanillaName = VanillaBankNameFor(modPath);
+                var vanilla = VanillaBankReader.ReadMusicBanks(Path.Combine(GameDirectory, "data", "audio_base_bnk.pack"))
+                    .First(bank => bank.Path.EndsWith(vanillaName, StringComparison.OrdinalIgnoreCase));
+
+                var vanillaIds = WalkHircSections(vanilla.Bytes).Select(section => section.Id).ToHashSet();
+                var modHircs = BnkFile.CreateFromBytes(modFile.DataSource.ReadData(), modPath, false).HircChunk?.HircItems ?? [];
+
+                // Whatever vanilla already defines is a replacement; the rest is new and gets appended.
+                // Splitting on the id rather than on the hirc type keeps this honest about what the
+                // mod actually re-emits - the campaign .bnk re-emits plain Switch containers and
+                // Music Tracks too, not only Music Switch containers.
+                var replacements = modHircs.Where(hirc => vanillaIds.Contains(hirc.Id)).ToDictionary(hirc => hirc.Id);
+                var additions = modHircs.Where(hirc => !vanillaIds.Contains(hirc.Id)).ToList();
+
+                var rebuilt = SpliceHircs(vanilla.Bytes, replacements, additions);
+                var reparsed = BnkFile.CreateFromBytes(rebuilt, vanilla.Path, false);
+
+                Console.WriteLine($"{modPath}\n  -> {vanillaName}: {replacements.Count} replaced, {additions.Count} appended, " +
+                    $"{rebuilt.Length} bytes (vanilla was {vanilla.Bytes.Length}), reparsed {reparsed.HircChunk.HircItems.Count} hircs");
+
+                foreach (var hirc in modHircs)
                 {
-                    Assert.That(reparsedContainers.ContainsKey(containerId), Is.True, $"container {containerId} is missing");
-                    Assert.That(reparsedContainers[containerId].AkDecisionTree.DecisionTree.Nodes.Count,
-                        Is.EqualTo(merged.AkDecisionTree.DecisionTree.Nodes.Count),
-                        $"container {containerId} did not survive the splice with its tree intact");
+                    replacedIds.Add(hirc.Id);
+                    Assert.That(reparsed.HircChunk.HircItems.Any(item => item.Id == hirc.Id), Is.True,
+                        $"{hirc.HircType} {hirc.Id} did not survive the splice into {vanillaName}");
                 }
 
-                foreach (var generated in generatedHircs)
-                    Assert.That(reparsed.HircChunk.HircItems.Any(hirc => hirc.Id == generated.Id), Is.True,
-                        $"generated hirc {generated.Id} is missing");
-            });
-
-            Console.WriteLine($"rebuilt {rebuilt.Length} bytes (vanilla was {vanilla.Bytes.Length}), " +
-                $"reparsed {reparsed.HircChunk.HircItems.Count} hircs");
-
-            modPack.IsReadOnly = false;
-            var packFileService = provider.GetRequiredService<IPackFileService>();
-
-            // The mod's own .bnks define the same hircs as the .bnk being replaced. Shipping them
-            // alongside it hands Wwise two definitions of every one of those ids, which is its own
-            // reason to throw a bank away and would sit on top of whatever is being measured here.
-            // The replacement .bnk carries the whole hierarchy, so none of them are needed.
-            foreach (var (path, file) in modPack.GetAllFiles().Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase)).ToList())
-            {
-                packFileService.DeleteFile(modPack, file);
-                Console.WriteLine($"dropped {path}");
+                newFiles.Add(new NewPackFileEntry("audio\\wwise",
+                    new Shared.Core.PackFiles.Models.PackFile(vanillaName,
+                        new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt))));
             }
 
-            packFileService.AddFilesToPack(modPack,
-            [
-                new NewPackFileEntry("audio\\wwise",
-                    new Shared.Core.PackFiles.Models.PackFile("global_music__core.bnk",
-                        new Shared.Core.PackFiles.Models.FileSources.MemorySource(rebuilt)))
-            ]);
+            // The testing and merging .bnks are now redundant - the replaced vanilla .bnks carry
+            // everything they held. The .bnk the mod actually ships stays, because it is the only
+            // place the Events and the Actions that set the State live, and nothing selects a branch
+            // for a State that no Action ever sets. Only the ids it shares with a replaced .bnk come
+            // out of it, so Wwise is never handed the same id twice.
+            foreach (var (path, file) in modBanks)
+            {
+                if (path.Contains("_for_testing.bnk", StringComparison.OrdinalIgnoreCase) ||
+                    path.Contains("_for_merging.bnk", StringComparison.OrdinalIgnoreCase))
+                {
+                    packFileService.DeleteFile(modPack, file);
+                    Console.WriteLine($"dropped {path}");
+                    continue;
+                }
 
-            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, outputName);
+                var trimmed = RemoveHircs(file.DataSource.ReadData(), replacedIds, out var removed);
+                if (removed.Count == 0)
+                    continue;
+
+                packFileService.DeleteFile(modPack, file);
+                newFiles.Add(new NewPackFileEntry("audio\\wwise",
+                    new Shared.Core.PackFiles.Models.PackFile(Path.GetFileName(path),
+                        new Shared.Core.PackFiles.Models.FileSources.MemorySource(trimmed))));
+
+                var kept = BnkFile.CreateFromBytes(trimmed, path, false).HircChunk?.HircItems ?? [];
+                Console.WriteLine($"trimmed {path}: dropped {removed.Count} ids now held by a replaced .bnk, " +
+                    $"kept {string.Join(", ", kept.Select(hirc => $"{hirc.HircType} {hirc.Id}"))}");
+            }
+
+            packFileService.AddFilesToPack(modPack, newFiles);
+
+            var outputPath = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_replacing_vanilla_bank.pack");
             packFileService.SavePackContainer(modPack, outputPath, false,
                 Shared.Core.Settings.GameInformationDatabase.GetGameById(Shared.Core.Settings.GameTypeEnum.Warhammer3));
 
             Console.WriteLine($"\nWrote {outputPath}");
+        }
+
+        /// <summary>The vanilla .bnk a testing .bnk overrides. The naming scheme is
+        /// {base}_1_{project}_for_testing.bnk against vanilla's {base}__core.bnk.</summary>
+        static string VanillaBankNameFor(string testingBankPath)
+        {
+            var name = Path.GetFileName(testingBankPath);
+            var separator = name.IndexOf("_1_", StringComparison.Ordinal);
+
+            if (separator == -1)
+                throw new InvalidDataException($"{name} is not named like a testing .bnk");
+
+            return $"{name[..separator]}__core.bnk";
+        }
+
+        /// <summary>The .bnk without the named hircs, spliced out at the byte level the same way
+        /// they are spliced in.</summary>
+        static byte[] RemoveHircs(byte[] bankBytes, HashSet<uint> ids, out List<uint> removed)
+        {
+            removed = [];
+            var keptBytes = new List<byte[]>();
+
+            foreach (var (_, id, section) in WalkHircSections(bankBytes))
+            {
+                if (ids.Contains(id))
+                    removed.Add(id);
+                else
+                    keptBytes.Add(section);
+            }
+
+            if (removed.Count == 0)
+                return bankBytes;
+
+            var hircChunkStart = 0;
+            while (System.Text.Encoding.ASCII.GetString(bankBytes, hircChunkStart, 4) != "HIRC")
+                hircChunkStart += 8 + (int)BitConverter.ToUInt32(bankBytes, hircChunkStart + 4);
+
+            var hircChunkSize = BitConverter.ToUInt32(bankBytes, hircChunkStart + 4);
+            var body = keptBytes.SelectMany(section => section).ToArray();
+
+            using var output = new MemoryStream();
+            output.Write(bankBytes, 0, hircChunkStart);
+            output.Write(System.Text.Encoding.ASCII.GetBytes("HIRC"));
+            output.Write(BitConverter.GetBytes((uint)(body.Length + 4)));
+            output.Write(BitConverter.GetBytes((uint)keptBytes.Count));
+            output.Write(body);
+
+            var afterHirc = hircChunkStart + 8 + (int)hircChunkSize;
+            if (afterHirc < bankBytes.Length)
+                output.Write(bankBytes, afterHirc, bankBytes.Length - afterHirc);
+
+            return output.ToArray();
         }
 
         /// <summary>
@@ -1225,7 +1264,7 @@ namespace Test.Audio
         /// that does not round trip byte for byte misaligns everything after it. Only the hircs
         /// actually being changed are written, so vanilla's bytes are carried across untouched.
         /// </summary>
-        static byte[] SpliceHircs(byte[] vanillaBytes, Dictionary<uint, CAkMusicSwitchCntr_V136> replacements, List<HircItem> additions)
+        static byte[] SpliceHircs(byte[] vanillaBytes, Dictionary<uint, HircItem> replacements, List<HircItem> additions)
         {
             // The HIRC chunk, found by walking the top level chunk table.
             var offset = 0;
@@ -1678,6 +1717,135 @@ namespace Test.Audio
             }
 
             yield return offset == bankBytes.Length ? "(ends exactly)" : $"(ends at {offset} of {bankBytes.Length})";
+        }
+
+        /// <summary>
+        /// The decision tree resolved the way Wwise resolves it - by index walking the flat node
+        /// array in the bytes that shipped - rather than by walking the nested tree.
+        ///
+        /// Every test on the merge asserts against the nested tree, but the nested tree is the input
+        /// to flattening, not the output. A branch can be perfectly placed there and still be
+        /// unreachable on disk if the flattening writes the wrong child offsets, and nothing written
+        /// so far would notice. This walks the array by ChildrenIdx exactly as the game does, for the
+        /// mod's State and for a vanilla one side by side.
+        /// </summary>
+        [Test]
+        public void WhetherTheArabyBranchResolvesTheWayWwiseWalksIt()
+        {
+            var replacementPack = Path.Combine(Path.GetDirectoryName(ModPackPath)!, "araby_music_replacing_vanilla_bank.pack");
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var pack = VanillaBankReader.OpenPack(provider, replacementPack, markAsCa: false);
+
+            var bankFile = pack.GetAllFiles()
+                .Single(file => file.Key.EndsWith("global_music__core.bnk", StringComparison.OrdinalIgnoreCase));
+
+            var bnk = BnkFile.CreateFromBytes(bankFile.Value.DataSource.ReadData(), bankFile.Key, false);
+            var hircIds = bnk.HircChunk.HircItems.Select(hirc => hirc.Id).ToHashSet();
+
+            foreach (var container in bnk.HircChunk.HircItems.OfType<CAkMusicSwitchCntr_V136>()
+                .Where(container => container.Id is 26264058 or 698158058))
+            {
+                Console.WriteLine($"\n================ container {container.Id} ================");
+                Console.WriteLine($"tree depth {container.TreeDepth}, declared tree data size {container.TreeDataSize}, " +
+                    $"written {container.AkDecisionTree.GetSize()}, {container.AkDecisionTree.Nodes.Count} nodes");
+                Console.WriteLine($"arguments: {string.Join(", ", container.Arguments.Select(argument => argument.GroupId))}");
+
+                var childIds = container.MusicTransNodeParams.MusicNodeParams.Children.ChildIds;
+                var dangling = childIds.Where(childId => !hircIds.Contains(childId)).ToList();
+                Console.WriteLine($"children: {childIds.Count}, naming {dangling.Count} hircs this bank does not hold" +
+                    (dangling.Count == 0 ? "" : $": {string.Join(", ", dangling)}"));
+
+                var treeBytes = container.AkDecisionTree.WriteData();
+
+                foreach (var stateName in new[] { "araby", "cathay" })
+                    ResolveLikeWwise(treeBytes, container.TreeDepth, WwiseHash.Compute(stateName), stateName, childIds, hircIds);
+            }
+        }
+
+        /// <summary>
+        /// Walks the flat node array from the root, taking the wanted key where a level offers it and
+        /// the default otherwise, exactly as the runtime does. Everything is read straight out of the
+        /// twelve byte records; nothing goes through the nested model.
+        /// </summary>
+        static void ResolveLikeWwise(byte[] treeBytes, uint treeDepth, uint wantedKey, string stateName, List<uint> childIds, HashSet<uint> hircIds)
+        {
+            const int recordSize = 12;
+            var recordCount = treeBytes.Length / recordSize;
+
+            Console.WriteLine($"\n  resolving '{stateName}' (key {wantedKey}) over {recordCount} records:");
+
+            var index = 0;
+
+            for (var depth = 0; depth < treeDepth; depth++)
+            {
+                var childrenIdx = BitConverter.ToUInt16(treeBytes, index * recordSize + 4);
+                var childrenCount = BitConverter.ToUInt16(treeBytes, index * recordSize + 6);
+
+                if (childrenCount == 0 || childrenIdx + childrenCount > recordCount)
+                {
+                    Console.WriteLine($"    depth {depth}: node {index} claims {childrenCount} children at {childrenIdx} - out of range, walk stops");
+                    return;
+                }
+
+                var chosen = -1;
+                var fallback = -1;
+
+                for (var offset = 0; offset < childrenCount; offset++)
+                {
+                    var candidate = childrenIdx + offset;
+                    var key = BitConverter.ToUInt32(treeBytes, candidate * recordSize);
+
+                    if (key == wantedKey)
+                        chosen = candidate;
+                    else if (key == 0)
+                        fallback = candidate;
+                }
+
+                var taken = chosen != -1 ? chosen : fallback;
+                var how = chosen != -1 ? "exact" : fallback != -1 ? "default" : "nothing";
+
+                if (taken == -1)
+                {
+                    Console.WriteLine($"    depth {depth}: node {index} has {childrenCount} children at {childrenIdx}, none match and no default - walk stops");
+                    return;
+                }
+
+                Console.WriteLine($"    depth {depth}: node {index} -> child {taken} ({how} match) of {childrenCount} at {childrenIdx}");
+                index = taken;
+            }
+
+            var audioNodeId = BitConverter.ToUInt32(treeBytes, index * recordSize + 4);
+            Console.WriteLine($"    leaf: node {index} names audio node {audioNodeId} " +
+                $"[{(hircIds.Contains(audioNodeId) ? "in bank" : "NOT IN BANK")}, " +
+                $"{(childIds.Contains(audioNodeId) ? "claimed as child" : "NOT CLAIMED AS CHILD")}]");
+        }
+
+        /// <summary>
+        /// Everything the mod's own .bnks hold, per .bnk.
+        ///
+        /// The replacement pack drops all of them to stop Wwise being handed two definitions of the
+        /// same ids, on the assumption the replaced .bnk carries everything that matters. That is only
+        /// true of the music hierarchy and the containers. Anything else in them - an Event, an Action
+        /// that sets the State - would have gone with them, and nothing sets a State that no Action
+        /// sets.
+        /// </summary>
+        [Test]
+        public void WhatTheModsOwnBanksHold()
+        {
+            using var provider = VanillaBankReader.CreateProvider(GameDirectory);
+            var pack = VanillaBankReader.OpenPack(provider, ModPackPath, markAsCa: false);
+
+            foreach (var (path, file) in pack.GetAllFiles()
+                .Where(file => file.Key.EndsWith(".bnk", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(file => file.Key))
+            {
+                var bnk = BnkFile.CreateFromBytes(file.DataSource.ReadData(), path, false);
+                var hircs = bnk.HircChunk?.HircItems ?? [];
+
+                Console.WriteLine($"\n{path}  ({hircs.Count} hircs)");
+                foreach (var hirc in hircs)
+                    Console.WriteLine($"    {hirc.HircType,-28} {hirc.Id}");
+            }
         }
 
         static void Record(Dictionary<string, (int Total, int Mismatched, string FirstExample)> results, string type, bool identical, string example)
