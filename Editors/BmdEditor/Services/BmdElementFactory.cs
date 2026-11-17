@@ -14,7 +14,8 @@ namespace Editors.BmdEditor.Services
 
         // All-0xFF is the "no culture restriction" pattern vanilla files use; an all-zero mask would
         // hide the new element from every culture.
-        private static byte[] WildcardCultureMaskBytes() => [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        /// <summary>The pdlc_mask Terry gives a prefab's entities: every bit.</summary>
+        private const ulong AllDlcs = ulong.MaxValue;
 
         private static BmdComponentFlags AllSeasonsFlags() => new()
         {
@@ -33,7 +34,7 @@ namespace Editors.BmdEditor.Services
             IsDecal = isDecal,
             Flags = AllSeasonsFlags(),
             HeightMode = "BHM_PARENT",
-            CultureMask = WildcardCultureMaskBytes(),
+            PdlcMask = AllDlcs,
             CastsShadow = true,
             VisibleInsideSnowRegion = true,
             VisibleOutsideSnowRegion = true,
@@ -49,7 +50,7 @@ namespace Editors.BmdEditor.Services
             Transform = Matrix.Identity,
             Flags = AllSeasonsFlags(),
             HeightMode = DefaultHeightMode,
-            CultureMask = WildcardCultureMaskBytes(),
+            PdlcMask = AllDlcs,
             Autoplay = true,
             VisibleWithoutShroud = true,
         };
@@ -65,6 +66,7 @@ namespace Editors.BmdEditor.Services
             ColorScale = 1,
             HeightMode = DefaultHeightMode,
             Flags = AllSeasonsFlags(),
+            PdlcMask = AllDlcs,
         };
 
         public static SpotLightInfo CreateSpotLight() => new()
@@ -84,6 +86,7 @@ namespace Editors.BmdEditor.Services
             Falloff = 1,
             HeightMode = DefaultHeightMode,
             Flags = AllSeasonsFlags(),
+            PdlcMask = AllDlcs,
         };
 
         public static SoundInfo CreateSound(string soundString) => new()
@@ -93,7 +96,7 @@ namespace Editors.BmdEditor.Services
             TypeString = "SST_POINT",
             CoordList = [new RmvVector3(0, 0, 0)],
             HeightMode = DefaultHeightMode,
-            CultureMask = new CultureMask { RawBytes = WildcardCultureMaskBytes() },
+            PdlcMask = AllDlcs,
         };
 
         public static PolyMeshInfo CreatePolyMesh(string materialString) => new()
@@ -137,6 +140,7 @@ namespace Editors.BmdEditor.Services
             SceneFile = sceneFile,
             Transform = Matrix.Identity,
             HeightMode = DefaultHeightMode,
+            PdlcMask = AllDlcs,
             Autoplay = true,
             VisibleWithoutShroud = true,
         };
